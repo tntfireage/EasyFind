@@ -66,6 +66,9 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private var results: [IndexEntry] = []
     private var iconCache: [String: NSImage] = [:]
     private var keyMonitor: Any?
+    private var liveSearchGeneration = 0
+    private var liveSearchWorkItem: DispatchWorkItem?
+    private var currentQuery = ""
 
     /// Reloaded from `config.json`; actions are resolved from here.
     var configuration: Configuration = .default
@@ -261,6 +264,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     // MARK: - Results
 
     private func refresh(query: String) {
+        currentQuery = query
+        liveSearchGeneration += 1
+        let generation = liveSearchGeneration
+        liveSearchWorkItem?.cancel()
+        liveSearchWorkItem = nil
+
         results = index.search(query)
         tableView.reloadData()
 
@@ -270,6 +279,59 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if !results.isEmpty {
             selectRow(0)
         }
+        scheduleLiveSearch(query: query, generation: generation)
+    }
+
+    /// Runs a debounced Spotlight filename search so files outside the indexed
+    /// directories are still findable. Results are discarded when the query
+    /// changes before they arrive.
+    private func scheduleLiveSearch(query: String, generation: Int) {
+        guard configuration.sync.files,
+              let live = Self.liveQuery(for: query) else { return }
+        let includeHidden = configuration.files.includeHidden
+
+        let work = DispatchWorkItem { [weak self] in
+            let hits = LiveFileSearch.search(query: live.text, mode: live.mode,
+                                             includeHidden: includeHidden)
+            DispatchQueue.main.async {
+                guard let self, self.liveSearchGeneration == generation,
+                      self.currentQuery == query else { return }
+                self.mergeLiveResults(hits)
+            }
+        }
+        liveSearchWorkItem = work
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func mergeLiveResults(_ hits: [IndexEntry]) {
+        guard !hits.isEmpty else { return }
+        let existing = Set(results.map(\.openTarget))
+        let extra = hits.filter { !existing.contains($0.openTarget) }
+        guard !extra.isEmpty else { return }
+
+        let selected = tableView.selectedRow
+        results.append(contentsOf: extra)
+        tableView.reloadData()
+        emptyLabel.isHidden = true
+        if selected >= 0 {
+            selectRow(selected)
+        } else {
+            selectRow(0)
+        }
+    }
+
+    private static func liveQuery(for raw: String) -> (text: String, mode: LiveFileSearch.Mode)? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("@") {
+            let text = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : (text, .files)
+        }
+        if trimmed.hasPrefix("~") {
+            let text = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : (text, .folders)
+        }
+        return (trimmed, .any)
     }
 
     private func emptyText(for query: String) -> String {

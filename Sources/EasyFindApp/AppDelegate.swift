@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.strings = strings
             panel.onWillShow = { [weak self] in
                 self?.reloadConfigurationIfChanged()
+                self?.syncCoordinator?.refreshFilesIfNeeded()
             }
             panelController = panel
 

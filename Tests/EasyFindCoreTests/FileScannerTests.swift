@@ -45,6 +45,86 @@ final class FileScannerTests: XCTestCase {
         XCTAssertEqual(FileScanner.scan(directories: [root.path], maxFiles: 2).count, 2)
     }
 
+    func testScanAllCollectsDirectoriesAndSkipsNoise() throws {
+        let root = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let alpha = root.appendingPathComponent("alpha", isDirectory: true)
+        let noise = root.appendingPathComponent("node_modules/pkg", isDirectory: true)
+        let hidden = root.appendingPathComponent(".hidden", isDirectory: true)
+        for directory in [alpha, noise, hidden] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try Data("x".utf8).write(to: alpha.appendingPathComponent("a.txt"))
+
+        let result = FileScanner.scanAll(directories: [root.path], maxFiles: 100)
+        let names = Set(result.directories.map(\.name))
+
+        XCTAssertTrue(names.contains("alpha"))
+        XCTAssertTrue(names.contains(root.lastPathComponent))
+        XCTAssertFalse(names.contains("node_modules"))
+        XCTAssertFalse(names.contains(".hidden"))
+        XCTAssertTrue(result.files.contains { $0.name == "a.txt" })
+    }
+
+    func testScanAllTraversesPluginPackagesButNotAppBundles() throws {
+        let root = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let plugin = root.appendingPathComponent("Tool.plugin", isDirectory: true)
+        try FileManager.default.createDirectory(at: plugin, withIntermediateDirectories: true)
+        try Data("p".utf8).write(to: plugin.appendingPathComponent("source.txt"))
+
+        try TestSupport.makeAppBundle(
+            at: root.appendingPathComponent("Demo.app"),
+            name: "Demo",
+            bundleID: "com.example.demo"
+        )
+
+        let files = FileScanner.scanAll(directories: [root.path], maxFiles: 100).files
+        let names = Set(files.map(\.name))
+
+        XCTAssertTrue(names.contains("source.txt"))
+        XCTAssertFalse(names.contains("Demo"))
+        XCTAssertFalse(names.contains("Info.plist"))
+    }
+
+    func testScanAllKeepsUserLibraryDirectories() throws {
+        let root = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        let library = documents.appendingPathComponent("Library", isDirectory: true)
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: library.appendingPathComponent("user.txt"))
+
+        let result = FileScanner.scanAll(directories: [documents.path], maxFiles: 100)
+        XCTAssertTrue(result.files.contains { $0.name == "user.txt" })
+        XCTAssertTrue(result.directories.contains { $0.name == "Library" })
+    }
+
+    func testIncludeHiddenIndexesDotFilesButSkipsJunk() throws {
+        let root = try TestSupport.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data("a".utf8).write(to: root.appendingPathComponent(".env"))
+        try Data("b".utf8).write(to: root.appendingPathComponent(".DS_Store"))
+        let config = root.appendingPathComponent(".config", isDirectory: true)
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: true)
+        try Data("c".utf8).write(to: config.appendingPathComponent("settings.json"))
+
+        let hiddenOff = FileScanner.scanAll(directories: [root.path], maxFiles: 100)
+        XCTAssertFalse(hiddenOff.files.contains { $0.name == ".env" })
+        XCTAssertFalse(hiddenOff.files.contains { $0.name == "settings.json" })
+
+        let hiddenOn = FileScanner.scanAll(directories: [root.path], maxFiles: 100,
+                                           includeHidden: true)
+        let names = Set(hiddenOn.files.map(\.name))
+        XCTAssertTrue(names.contains(".env"))
+        XCTAssertTrue(names.contains("settings.json"))
+        XCTAssertFalse(names.contains(".DS_Store"))
+    }
+
     func testCanonicalFileRequiresExistingRegularFile() throws {
         let root = try TestSupport.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

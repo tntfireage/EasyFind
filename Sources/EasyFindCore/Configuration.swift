@@ -53,12 +53,18 @@ public struct FileSearchConfig: Codable, Equatable {
     public var directories: [String]
     /// Upper bound on indexed files per sync; protects against enormous trees.
     public var maxFiles: Int
+    /// Include dotfiles and hidden directories (`.git`, `.build`, and similar
+    /// noise directories are still skipped).
+    public var includeHidden: Bool
 
     public static let defaultDirectories = ["~/Desktop", "~/Documents", "~/Downloads"]
 
-    public init(directories: [String] = FileSearchConfig.defaultDirectories, maxFiles: Int = 20_000) {
+    public init(directories: [String] = FileSearchConfig.defaultDirectories,
+                maxFiles: Int = 20_000,
+                includeHidden: Bool = false) {
         self.directories = directories
         self.maxFiles = maxFiles
+        self.includeHidden = includeHidden
     }
 }
 

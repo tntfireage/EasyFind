@@ -1,8 +1,21 @@
 import Foundation
 
-/// Walks a configured set of directories and produces file candidates for the
-/// in-memory search index. The scan runs on the caller's queue; `SyncCoordinator`
-/// invokes it on its background sync queue so the UI stays responsive.
+public struct FileScanResult {
+    public let files: [FileCandidate]
+    public let directories: [FolderCandidate]
+
+    public init(files: [FileCandidate], directories: [FolderCandidate]) {
+        self.files = files
+        self.directories = directories
+    }
+
+    public static let empty = FileScanResult(files: [], directories: [])
+}
+
+/// Walks a configured set of directories and produces file and directory
+/// candidates for the in-memory search index. The scan runs on the caller's
+/// queue; `SyncCoordinator` invokes it on its background sync queue so the UI
+/// stays responsive.
 public enum FileScanner {
     /// Roots that never belong in the index even when explicitly configured.
     /// `/usr/local` and `/opt/homebrew` are exempt (user-installed tooling).
@@ -13,11 +26,24 @@ public enum FileScanner {
     private static let allowedSystemPrefixes = ["/usr/local", "/opt/homebrew"]
 
     /// Directory names skipped during the walk. These are build output, dependency
-    /// trees, and caches that would drown out the user's real files.
+    /// trees, and caches that would drown out the user's real files. `Library` is
+    /// handled separately so a user folder such as `Documents/Library` is kept.
     public static let skippedDirectoryNames: Set<String> = [
         ".git", ".build", ".swiftpm", "node_modules", "Pods", "DerivedData",
-        "__pycache__", ".venv", "venv", "Caches", "Library"
+        "__pycache__", ".venv", "venv", "Caches"
     ]
+
+    /// Hidden entries that are noise even when `includeHidden` is enabled.
+    private static let ignoredHiddenNames: Set<String> = [
+        ".DS_Store", ".localized", ".VolumeIcon.icns",
+        ".Trashes", ".Spotlight-V100", ".fseventsd", ".DocumentRevisions-V100",
+        ".TemporaryItems", ".MobileBackups", ".com.apple.timemachine.donotpresent"
+    ]
+
+    /// Package directories that may still contain user-readable source files.
+    /// Everything else that macOS marks as a package (`.app`, `.framework`, …)
+    /// is skipped entirely.
+    private static let traversablePackageExtensions: Set<String> = ["plugin"]
 
     private static let resourceKeys: Set<URLResourceKey> = [
         .isRegularFileKey, .isDirectoryKey, .isPackageKey, .isSymbolicLinkKey,
@@ -25,9 +51,37 @@ public enum FileScanner {
     ]
 
     public static func scan(directories: [String], maxFiles: Int = 20_000) -> [FileCandidate] {
-        guard maxFiles > 0 else { return [] }
-        var candidates: [FileCandidate] = []
-        var seen = Set<String>()
+        scanAll(directories: directories, maxFiles: maxFiles).files
+    }
+
+    public static func scanAll(directories: [String], maxFiles: Int = 20_000,
+                               maxDirectories: Int = 5_000,
+                               includeHidden: Bool = false) -> FileScanResult {
+        guard maxFiles > 0 || maxDirectories > 0 else { return .empty }
+
+        var files: [FileCandidate] = []
+        var directoriesFound: [FolderCandidate] = []
+        var seenFiles = Set<String>()
+        var seenDirectories = Set<String>()
+
+        let options: FileManager.DirectoryEnumerationOptions = includeHidden
+            ? [] : [.skipsHiddenFiles]
+
+        func addDirectory(_ url: URL, values: URLResourceValues) {
+            guard directoriesFound.count < maxDirectories else { return }
+            let canonical = url.resolvingSymlinksInPath().standardizedFileURL.path
+            let key = canonical.lowercased()
+            guard seenDirectories.insert(key).inserted else { return }
+            let modified = Int64(values.contentModificationDate?.timeIntervalSince1970 ?? 0)
+            directoriesFound.append(FolderCandidate(
+                key: key,
+                path: canonical,
+                name: url.lastPathComponent,
+                visits: 0,
+                lastSeen: modified,
+                sources: ["scan"]
+            ))
+        }
 
         outer: for raw in directories {
             guard let root = FolderHistoryScanner.canonicalDirectory(raw) else { continue }
@@ -36,10 +90,16 @@ public enum FileScanner {
                 continue
             }
 
+            let rootURL = URL(fileURLWithPath: root)
+            if let values = try? rootURL.resourceValues(forKeys: resourceKeys),
+               values.isDirectory == true, values.isPackage != true {
+                addDirectory(rootURL, values: values)
+            }
+
             let enumerator = FileManager.default.enumerator(
-                at: URL(fileURLWithPath: root),
+                at: rootURL,
                 includingPropertiesForKeys: Array(resourceKeys),
-                options: [.skipsHiddenFiles, .skipsPackageDescendants],
+                options: options,
                 errorHandler: { url, error in
                     NSLog("EasyFind: file scan skipped %@: %@", url.path, String(describing: error))
                     return true
@@ -47,14 +107,18 @@ public enum FileScanner {
             )
 
             while let url = enumerator?.nextObject() as? URL {
-                if candidates.count >= maxFiles { break outer }
+                if maxFiles > 0 && files.count >= maxFiles { break outer }
 
                 guard let values = try? url.resourceValues(forKeys: resourceKeys) else { continue }
+                let name = url.lastPathComponent
 
                 if values.isDirectory == true {
-                    if values.isSymbolicLink == true
-                        || skippedDirectoryNames.contains(url.lastPathComponent) {
+                    if shouldSkipDirectory(url, values: values, includeHidden: includeHidden) {
                         enumerator?.skipDescendants()
+                        continue
+                    }
+                    if values.isPackage != true {
+                        addDirectory(url, values: values)
                     }
                     continue
                 }
@@ -62,16 +126,17 @@ public enum FileScanner {
                 guard values.isRegularFile == true,
                       values.isSymbolicLink != true,
                       !isDeniedSystemPath(url.path) else { continue }
+                if includeHidden && ignoredHiddenNames.contains(name) { continue }
 
                 let canonical = url.resolvingSymlinksInPath().standardizedFileURL.path
                 let key = canonical.lowercased()
-                guard seen.insert(key).inserted else { continue }
+                guard seenFiles.insert(key).inserted else { continue }
 
                 let modified = Int64(values.contentModificationDate?.timeIntervalSince1970 ?? 0)
-                candidates.append(FileCandidate(
+                files.append(FileCandidate(
                     key: key,
                     path: canonical,
-                    name: url.lastPathComponent,
+                    name: name,
                     visits: 0,
                     lastSeen: modified,
                     sources: ["scan"]
@@ -79,10 +144,28 @@ public enum FileScanner {
             }
         }
 
-        if candidates.count >= maxFiles {
+        if maxFiles > 0 && files.count >= maxFiles {
             NSLog("EasyFind: file index reached the %d file cap", maxFiles)
         }
-        return candidates
+        if directoriesFound.count >= maxDirectories {
+            NSLog("EasyFind: directory index reached the %d directory cap", maxDirectories)
+        }
+        return FileScanResult(files: files, directories: directoriesFound)
+    }
+
+    private static func shouldSkipDirectory(_ url: URL, values: URLResourceValues,
+                                            includeHidden: Bool) -> Bool {
+        let name = url.lastPathComponent
+        if skippedDirectoryNames.contains(name) { return true }
+        if includeHidden && ignoredHiddenNames.contains(name) { return true }
+        if !includeHidden && name.hasPrefix(".") { return true }
+        if name == "Library" {
+            return url.deletingLastPathComponent().standardizedFileURL.path == NSHomeDirectory()
+        }
+        if values.isPackage == true {
+            return !traversablePackageExtensions.contains(url.pathExtension.lowercased())
+        }
+        return false
     }
 
     /// Resolves symlinks, standardizes, and requires an existing regular file.

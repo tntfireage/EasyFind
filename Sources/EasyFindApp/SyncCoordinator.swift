@@ -14,6 +14,7 @@ final class SyncCoordinator {
     var strings: Strings
     private var timer: DispatchSourceTimer?
     private var isSyncing = false
+    private var lastFileIndexAt: Date?
 
     var onUpdate: (() -> Void)?
 
@@ -57,6 +58,26 @@ final class SyncCoordinator {
     func syncNow() {
         queue.async { [weak self] in
             self?.performSync()
+        }
+    }
+
+    /// Refreshes only the file/directory index when it is stale. Called when the
+    /// panel opens so files created since the last scheduled sync are searchable
+    /// without waiting for the full interval.
+    func refreshFilesIfNeeded(maxAge: TimeInterval = 30) {
+        queue.async { [weak self] in
+            guard let self, self.configuration.sync.files else { return }
+            if let last = self.lastFileIndexAt, Date().timeIntervalSince(last) < maxAge {
+                return
+            }
+            do {
+                let (files, directories) = self.scanFileIndex()
+                try self.store.replaceFiles(files)
+                try self.store.replaceFolders(directories)
+                self.publish(try self.store.snapshot())
+            } catch {
+                NSLog("EasyFind: file refresh failed: %@", String(describing: error))
+            }
         }
     }
 
@@ -112,37 +133,55 @@ final class SyncCoordinator {
                 NSLog("EasyFind: indexed %d app(s)", apps.count)
             }
 
+            var folders: [FolderCandidate] = []
             if configuration.sync.folders {
-                let folders = FolderHistoryScanner.scan()
+                folders.append(contentsOf: FolderHistoryScanner.scan())
+            }
+            if configuration.sync.files {
+                let (files, scannedDirectories) = scanFileIndex()
+                folders.append(contentsOf: scannedDirectories)
+                try store.replaceFiles(files)
+            }
+            if configuration.sync.folders || configuration.sync.files {
                 try store.replaceFolders(folders)
                 NSLog("EasyFind: indexed %d folder(s)", folders.count)
             }
 
-            if configuration.sync.files {
-                let directories = configuration.files.directories
-                let scanned = FileScanner.scan(directories: directories,
-                                               maxFiles: configuration.files.maxFiles)
-                let recent = RecentFilesScanner.scan(directories: directories, limit: 300)
-                let files = FileCatalog.merge(scanned: scanned, recent: recent,
-                                              directories: directories)
-                try store.replaceFiles(files)
-                NSLog("EasyFind: indexed %d file(s) from %d recent", files.count, recent.count)
-            }
-
-            let snapshot = try store.snapshot()
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.index.update(
-                    entries: snapshot.entries,
-                    deepLinks: snapshot.deepLinks,
-                    apps: snapshot.apps,
-                    folders: snapshot.folders,
-                    files: snapshot.files
-                )
-                self.onUpdate?()
-            }
+            publish(try store.snapshot())
         } catch {
             NSLog("EasyFind: sync failed: \(error)")
+        }
+    }
+
+    /// Scans the configured directories, merges system recents, and returns the
+    /// file catalog plus the directories discovered during the same walk.
+    private func scanFileIndex() -> ([FileCandidate], [FolderCandidate]) {
+        let directories = configuration.files.directories
+        let result = FileScanner.scanAll(
+            directories: directories,
+            maxFiles: configuration.files.maxFiles,
+            includeHidden: configuration.files.includeHidden
+        )
+        let recent = RecentFilesScanner.scan(directories: directories, limit: 300)
+        let files = FileCatalog.merge(scanned: result.files, recent: recent,
+                                      directories: directories)
+        lastFileIndexAt = Date()
+        NSLog("EasyFind: indexed %d file(s) and %d folder(s) from %d recent",
+              files.count, result.directories.count, recent.count)
+        return (files, result.directories)
+    }
+
+    private func publish(_ snapshot: StoreSnapshot) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.index.update(
+                entries: snapshot.entries,
+                deepLinks: snapshot.deepLinks,
+                apps: snapshot.apps,
+                folders: snapshot.folders,
+                files: snapshot.files
+            )
+            self.onUpdate?()
         }
     }
 

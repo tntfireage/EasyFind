@@ -27,6 +27,7 @@
       "~/Documents",
       "~/Downloads"
     ],
+    "includeHidden" : false,
     "maxFiles" : 20000
   },
   "hotkey" : {

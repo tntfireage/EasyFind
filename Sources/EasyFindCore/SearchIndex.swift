@@ -13,6 +13,22 @@ public struct IndexEntry: Equatable {
     public let lastSeen: Int64
     public let haystack: String
 
+    public init(id: Int64, kind: EntryKind, isDeepLink: Bool, host: String, title: String?,
+                alias: String?, url: String?, openTarget: String, visits: Int,
+                lastSeen: Int64, haystack: String) {
+        self.id = id
+        self.kind = kind
+        self.isDeepLink = isDeepLink
+        self.host = host
+        self.title = title
+        self.alias = alias
+        self.url = url
+        self.openTarget = openTarget
+        self.visits = visits
+        self.lastSeen = lastSeen
+        self.haystack = haystack
+    }
+
     public var displayName: String {
         if let alias, !alias.isEmpty { return alias }
         if let title, !title.isEmpty { return title }

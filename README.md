@@ -94,10 +94,14 @@ EasyFind 把“找东西并打开”收敛到一个面板，覆盖网页、应�
 
 ### 文件搜索
 
-- 后台扫描 `config.json` 中 `files.directories` 配置的目录（默认桌面、文稿、下载），只索引文件名与路径，**不读取文件内容**。
+- 后台扫描 `config.json` 中 `files.directories` 配置的目录（默认桌面、文稿、下载），索引文件名与路径，并把扫描到的目录加入目录搜索，**不读取文件内容**。
+- 索引之外的文件/目录通过 Spotlight 实时按文件名查询，覆盖整个用户空间（`~/`、外接卷、`/usr/local`、`/opt/homebrew`），不再局限于“常用”或配置目录。输入 `install.sh`、`bcmm-core` 这类名字即可找到。
+- 实时查询同样排除系统位置和噪声目录（`.git`、`.build`、`node_modules`、`~/Library` 等），只返回当前存在的文件或目录。
 - 合并系统“最近使用”文档（Spotlight 的 `kMDItemLastUsedDate`）与 EasyFind 内的打开次数，空查询时优先展示最常用的文件。
-- 自动跳过隐藏文件、`.app` 等包、`node_modules`、`.build`、`Caches`、`Library` 等噪声目录，以及 `/System`、`/usr`、`/bin`、`/sbin`、`/Library`、`/Applications` 等系统位置；`/usr/local`、`/opt/homebrew` 例外。
-- 输入 `@` 只看文件；默认动作：Enter 打开，⌘Enter 在 Finder 中显示，⌥Enter 复制完整路径。
+- 自动跳过 `.app` 等应用包、`node_modules`、`.build`、`Caches` 等噪声目录，以及 `/System`、`/usr`、`/bin`、`/sbin`、`/Library`、`/Applications` 等系统位置；`/usr/local`、`/opt/homebrew` 例外。`Documents/Library` 这类用户目录不会被误跳过。
+- 隐藏文件/目录默认不索引；设置 `files.includeHidden: true` 后搜索 `.env`、`.github`、`.claude` 等隐藏项（`.git`、`.build`、`.DS_Store` 等仍会跳过）。
+- 打开面板时若索引超过 30 秒未更新，会在后台补扫一次，新建文件不必等到下一个同步周期。
+- 输入 `@` 只看文件，`~` 只看目录；默认动作：Enter 打开，⌘Enter 在 Finder 中显示，⌥Enter 复制完整路径。
 
 ### 搜索
 
@@ -187,6 +191,7 @@ make uninstall
   },
   "files": {
     "directories": ["~/Desktop", "~/Documents", "~/Downloads"],
+    "includeHidden": false,
     "maxFiles": 20000
   },
   "hotkey": { "key": "g", "modifiers": ["command"] },
@@ -243,10 +248,11 @@ make uninstall
 
 | 字段 | 说明 |
 |---|---|
-| `directories` | 要索引的目录，支持 `~`；默认 `~/Desktop`、`~/Documents`、`~/Downloads` |
+| `directories` | 要**索引**的目录，支持 `~`；默认 `~/Desktop`、`~/Documents`、`~/Downloads`。索引之外的路径仍会通过 Spotlight 实时按文件名搜索 |
 | `maxFiles` | 单轮索引的文件上限，100–200000，默认 20000 |
+| `includeHidden` | 是否索引/搜索隐藏文件与目录，默认 `false` |
 
-系统位置（`/System`、`/usr`、`/bin`、`/sbin`、`/Library`、`/Applications` 等）不会被索引；`/usr/local` 与 `/opt/homebrew` 例外。隐藏文件、`.app` 包和 `node_modules`/`.build` 等噪声目录会自动跳过。只保存文件名与路径，不读取文件内容。
+系统位置（`/System`、`/usr`、`/bin`、`/sbin`、`/Library`、`/Applications` 等）不会被索引或实时搜索；`/usr/local` 与 `/opt/homebrew` 例外。`.app` 包和 `node_modules`/`.build` 等噪声目录会自动跳过；`includeHidden` 打开后，`.git`、`.build`、`.DS_Store` 等仍会跳过。扫描到的目录也会进入目录搜索。只保存文件名与路径，不读取文件内容。
 
 ### actions
 
@@ -345,7 +351,8 @@ make uninstall
 | Chrome 标签页 | AppleScript 读取窗口/标签标题与 URL | 每轮，Chrome 未运行则跳过 | 自动化 | 完整 URL + 标题 |
 | 已安装应用 | 扫描 5 个标准目录，读 bundle 元数据 | 每轮 | 无 | 名称、bundle id、路径、启动次数 |
 | 目录历史 | Cursor/VS Code `state.vscdb`、Finder `FXRecentFolders`、zsh 历史 | 每轮 | 无 | 规范化全路径、来源、次数 |
-| 常用文件（扫描） | 后台队列遍历 `files.directories` | 每轮 | **文件与文件夹**（首次访问桌面/文稿/下载时弹窗） | 规范化路径、名称、修改时间 |
+| 常用文件（扫描） | 后台队列遍历 `files.directories` | 每轮 + 打开面板时补扫 | **文件与文件夹**（首次访问桌面/文稿/下载时弹窗） | 文件路径/名称/修改时间，以及扫描到的目录 |
+| 实时文件/目录搜索 | Spotlight `mdfind -name`（输入后防抖查询） | 每次输入 | 无（读取 Spotlight 索引） | 不落库，仅当前会话结果 |
 | 系统最近使用文件 | Spotlight `kMDItemLastUsedDate` | 每轮 | **文件与文件夹** | 最近使用时间 |
 | 手动条目 | 应用内添加 | 即时 | 无 | URL + 别名 |
 
@@ -358,7 +365,8 @@ make uninstall
 - **应用**：`/Applications`、`/Applications/Utilities`、`/System/Applications`、`/System/Applications/Utilities`、`~/Applications` 的顶层 `.app`；按 bundle id 去重，`/Applications` 优先；嵌套 helper 不扫描。
 - **目录**：只收绝对路径和 `~` 路径的 `cd`（相对路径无法还原当时 cwd）；编辑器取 `folderUri` 与 `fileUri` 的父目录；Finder 解析书签；包（`.app`、`.cannedSearch` 等）排除。
 - **目录去重**：符号链接解析 + 标准化 + 去尾部 `/`，唯一键为小写全路径；跨来源合并次数/时间/来源标签。
-- **文件**：只扫描 `files.directories` 中存在的目录；每轮最多 `files.maxFiles` 个文件；隐藏文件、包、符号链接和噪声目录跳过；系统位置不索引（`/usr/local`、`/opt/homebrew` 例外）。系统“最近使用”通过 Spotlight 按目录范围查询，与扫描结果按规范化路径合并，`last_seen` 取较新值。文件缺失时在读取快照阶段过滤，打开次数保留。
+- **文件**：只扫描 `files.directories` 中存在的目录；每轮最多 `files.maxFiles` 个文件；扫描到的目录同时加入目录索引。`.app` 等应用包、符号链接和噪声目录跳过；`Documents/Library` 等用户目录保留，仅 `~/Library` 被跳过；系统位置不索引（`/usr/local`、`/opt/homebrew` 例外）。默认不索引隐藏项，`files.includeHidden` 打开后可搜索 `.env`、`.github` 等（`.git`、`.build`、`.DS_Store` 仍跳过）。系统“最近使用”通过 Spotlight 按目录范围查询，与扫描结果按规范化路径合并，`last_seen` 取较新值。文件缺失时在读取快照阶段过滤，打开次数保留。打开面板时若索引超过 30 秒未刷新，会在后台补扫。
+- **实时搜索**：输入非空查询后，用 `mdfind -name` 在用户空间（`~/`、`/Volumes`、`/usr/local`、`/opt/homebrew`）按文件名查找文件和目录，再按同样的系统位置/噪声/隐藏规则过滤；结果与内存索引去重后追加。Spotlight 未索引的路径仍可通过配置目录的扫描结果找到。
 
 ---
 
@@ -414,7 +422,7 @@ make uninstall
 | `visits` | 来源观测次数 |
 | `own_opens` | 通过 EasyFind 打开的次数 |
 | `last_seen` | 最近出现时间 |
-| `sources` | `shell,cursor,code,finder` 的组合 |
+| `sources` | `shell,cursor,code,finder,scan` 的组合 |
 
 `path_key` 与 `path` 均唯一。缺失目录不进入索引但保留行，卷重新挂载后可再次出现。
 
@@ -515,8 +523,9 @@ Safari 历史未授权时会被跳过，其他浏览器继续同步；菜单栏 
 - 标签页每 10 分钟采一次，两次采集之间关闭的标签不会进入档案。
 - 应用只扫描 5 个目录的顶层 `.app`；应用只参与搜索，不出现在空查询列表。
 - 相对路径 `cd` 无法还原；目录历史只收绝对路径和 `~` 路径；包会被排除。
-- 目录来源目前是 Cursor、VS Code、Finder 和 zsh。
-- 文件搜索只覆盖配置目录，不做整盘全文检索；系统位置不索引；默认最多 20000 个文件。
+- 目录来源包括 Cursor、VS Code、Finder、zsh，以及文件扫描发现的目录。
+- 文件/目录实时搜索依赖 Spotlight；Spotlight 关闭或未索引的路径只能通过配置目录的扫描结果找到。只按名称/路径匹配，不做全文检索。
+- 系统位置不索引；默认不搜索隐藏项；默认最多索引 20000 个文件。
 - 系统“最近使用”依赖 Spotlight 元数据；Spotlight 关闭或未索引的目录只能按文件修改时间排序。
 - 未公证、ad-hoc 签名，仅建议本机自用。
 

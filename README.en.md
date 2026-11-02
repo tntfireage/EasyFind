@@ -93,9 +93,13 @@ EasyFind turns "find it and open it" into one panel covering five kinds of targe
 ### Files
 
 - Scans the directories configured in `files.directories` (Desktop, Documents, and Downloads by default) on a background queue and indexes file names and paths only; file contents are never read.
+- Files and folders outside the index are found on demand through Spotlight filename search across the user space (`~/`, external volumes, `/usr/local`, `/opt/homebrew`). Typing `install.sh` or `bcmm-core` works even when the path was never indexed.
+- On-demand results apply the same system-location and noise filters (`.git`, `.build`, `node_modules`, `~/Library`, …) and only return paths that still exist.
 - Merges the system's recently used documents (Spotlight `kMDItemLastUsedDate`) with EasyFind open counts, so the most-used files appear first in the empty-query list.
-- Skips hidden files, packages such as `.app`, noise directories (`node_modules`, `.build`, `Caches`, `Library`), and system locations (`/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/Applications`); `/usr/local` and `/opt/homebrew` are exempt.
-- Type `@` for file-only results; default actions: Enter opens, ⌘Enter reveals in Finder, ⌥Enter copies the full path.
+- Skips packages such as `.app`, noise directories (`node_modules`, `.build`, `Caches`), and system locations (`/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/Applications`); `/usr/local` and `/opt/homebrew` are exempt. User folders such as `Documents/Library` are kept.
+- Hidden files and directories are excluded by default; set `files.includeHidden: true` to search `.env`, `.github`, `.claude`, and similar (`.git`, `.build`, `.DS_Store` remain skipped).
+- When the panel opens and the index is older than 30 seconds, a background rescan runs so new files do not wait for the next sync.
+- Type `@` for file-only results or `~` for folder-only results; default actions: Enter opens, ⌘Enter reveals in Finder, ⌥Enter copies the full path.
 
 ### Search
 
@@ -185,6 +189,7 @@ The login item is registered through `SMAppService.mainApp`; keep the app in `/A
   },
   "files": {
     "directories": ["~/Desktop", "~/Documents", "~/Downloads"],
+    "includeHidden": false,
     "maxFiles": 20000
   },
   "hotkey": { "key": "g", "modifiers": ["command"] },
@@ -241,10 +246,11 @@ Disabling a source does not delete existing data; it only stops refreshing it.
 
 | Field | Description |
 |---|---|
-| `directories` | Directories to index; `~` is expanded. Defaults to `~/Desktop`, `~/Documents`, `~/Downloads` |
+| `directories` | Directories to **index**; `~` is expanded. Defaults to `~/Desktop`, `~/Documents`, `~/Downloads`. Paths outside the index are still found by Spotlight filename search |
 | `maxFiles` | Per-sync file cap, 100–200000, default 20000 |
+| `includeHidden` | Index/search hidden files and directories, default `false` |
 
-System locations (`/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/Applications`, and similar) are never indexed; `/usr/local` and `/opt/homebrew` are exempt. Hidden files, `.app` packages, and noise directories such as `node_modules`/`.build` are skipped. Only file names and paths are stored; contents are never read.
+System locations (`/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/Applications`, and similar) are never indexed or searched live; `/usr/local` and `/opt/homebrew` are exempt. `.app` packages and noise directories such as `node_modules`/`.build` are skipped; `.git`, `.build`, `.DS_Store`, and similar are still skipped when `includeHidden` is enabled. Directories found by the scan also become searchable folder entries. Only file names and paths are stored; contents are never read.
 
 ### actions
 
@@ -345,7 +351,8 @@ One sync runs at launch, then every 10 minutes (development builds can override 
 | Chrome tabs | AppleScript reads window/tab titles and URLs | every cycle, skipped when Chrome isn't running | Automation | full URL + title |
 | Installed apps | scans 5 standard roots, reads bundle metadata | every cycle | none | name, bundle ID, path, launch count |
 | Folder history | Cursor/VS Code `state.vscdb`, Finder `FXRecentFolders`, zsh history | every cycle | none | canonical full path, sources, count |
-| File scan | walks `files.directories` on a background queue | every cycle | **Files and Folders** (first access to Desktop/Documents/Downloads) | canonical path, name, modification time |
+| File scan | walks `files.directories` on a background queue | every cycle + panel-open rescan | **Files and Folders** (first access to Desktop/Documents/Downloads) | file path/name/modification time, plus discovered directories |
+| Live file/folder search | Spotlight `mdfind -name`, debounced per keystroke | every query | none (uses the Spotlight index) | not persisted; current session only |
 | System recent documents | Spotlight `kMDItemLastUsedDate` | every cycle | **Files and Folders** | last-used time |
 | Manual entries | added in the app | immediate | none | URL + alias |
 
@@ -358,7 +365,8 @@ Details:
 - **Apps**: top-level `.app` bundles in `/Applications`, `/Applications/Utilities`, `/System/Applications`, `/System/Applications/Utilities`, and `~/Applications`; deduplicated by bundle ID with `/Applications` preferred; nested helpers are ignored.
 - **Folders**: only absolute and `~`-rooted `cd` commands (relative paths cannot be resolved without the historical cwd); editor recents use `folderUri` and the parent of `fileUri`; Finder bookmarks are resolved; packages (`.app`, `.cannedSearch`, etc.) are excluded.
 - **Folder deduplication**: symlinks resolved, path standardized, trailing `/` removed; the key is the lowercased full path; counts, timestamps, and source labels are merged across sources.
-- **Files**: only directories listed in `files.directories` are walked, capped at `files.maxFiles` per cycle. Hidden files, packages, symlinks, and noise directories are skipped; system locations are excluded (`/usr/local` and `/opt/homebrew` are exempt). System recents are queried through Spotlight scoped to those directories and merged by canonical path, keeping the newer `last_seen`. Missing files are filtered when the snapshot is read; open counts are retained.
+- **Files**: only directories listed in `files.directories` are walked, capped at `files.maxFiles` per cycle; discovered directories also become folder entries. `.app` packages, symlinks, and noise directories are skipped; user folders such as `Documents/Library` are kept while `~/Library` is skipped; system locations are excluded (`/usr/local` and `/opt/homebrew` are exempt). Hidden entries are off by default; `files.includeHidden: true` adds `.env`, `.github`, and similar (`.git`, `.build`, `.DS_Store` remain skipped). System recents are queried through Spotlight and merged by canonical path, keeping the newer `last_seen`. Missing files are filtered when the snapshot is read; open counts are retained. Opening the panel rescans in the background when the index is older than 30 seconds.
+- **Live search**: a non-empty query runs `mdfind -name` over the user space (`~/`, `/Volumes`, `/usr/local`, `/opt/homebrew`), filters results with the same system/noise/hidden rules, and appends new files or folders after the in-memory results. Paths Spotlight has not indexed remain available through the configured-directory scan.
 
 ---
 
@@ -414,7 +422,7 @@ The five most-visited full pages per host; searchable, but never shown in the em
 | `visits` | source-observed count |
 | `own_opens` | times opened through EasyFind |
 | `last_seen` | last observed time |
-| `sources` | combination of `shell,cursor,code,finder` |
+| `sources` | combination of `shell,cursor,code,finder,scan` |
 
 Both `path_key` and `path` are unique. Missing directories are filtered from the index but their rows are kept, so a remounted volume can reappear.
 
@@ -515,8 +523,9 @@ Safari history is skipped without Full Disk Access while other browsers keep syn
 - Tabs are collected every 10 minutes; tabs closed between collections are not archived.
 - Apps are scanned only as top-level `.app` bundles in the five roots; apps are search-only and do not appear in the empty-query list.
 - Relative `cd` targets cannot be reconstructed; folder history only keeps absolute and `~` paths, and packages are excluded.
-- Folder sources are currently Cursor, VS Code, Finder, and zsh.
-- File search covers the configured directories only, not arbitrary full-disk content; system locations are excluded; the default cap is 20,000 files.
+- Folder sources are Cursor, VS Code, Finder, zsh, and directories discovered by the file scan.
+- Live file/folder search depends on Spotlight; paths that Spotlight has not indexed can still be found through the configured-directory scan. Matching is by name/path, never full text.
+- System locations are excluded; hidden entries are off by default; the index is capped at 20,000 files by default.
 - System recents depend on Spotlight metadata; directories that Spotlight has not indexed are ranked by modification time only.
 - Not notarized; ad-hoc signed and intended for local use.
 

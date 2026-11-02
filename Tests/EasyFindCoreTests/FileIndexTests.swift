@@ -99,6 +99,7 @@ final class FileIndexTests: XCTestCase {
         XCTAssertTrue(Configuration.default.sync.files)
         XCTAssertEqual(Configuration.default.files.directories, FileSearchConfig.defaultDirectories)
         XCTAssertEqual(Configuration.default.files.maxFiles, 20_000)
+        XCTAssertFalse(Configuration.default.files.includeHidden)
         XCTAssertEqual(Configuration.default.actions.file.commandEnter, "finder")
 
         let configuration = Configuration.default
@@ -121,7 +122,24 @@ final class FileIndexTests: XCTestCase {
         let configuration = ConfigurationLoader.load(from: url)
         XCTAssertTrue(configuration.sync.files)
         XCTAssertEqual(configuration.files.directories, FileSearchConfig.defaultDirectories)
+        XCTAssertFalse(configuration.files.includeHidden)
         XCTAssertEqual(configuration.actions.file.enter, "open")
+    }
+
+    func testScannedDirectoriesAreStoredAsFolders() throws {
+        let (store, directory) = try TestSupport.makeStore()
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let alpha = directory.appendingPathComponent("alpha", isDirectory: true)
+        try FileManager.default.createDirectory(at: alpha, withIntermediateDirectories: true)
+
+        let result = FileScanner.scanAll(directories: [directory.path], maxFiles: 100)
+        try store.replaceFolders(result.directories)
+
+        let folders = try store.snapshot().folders
+        let entry = try XCTUnwrap(folders.first { $0.name == "alpha" })
+        XCTAssertEqual(entry.sources, ["scan"])
+        XCTAssertEqual(entry.visits, 0)
     }
 
     private func fileCandidate(path: String, visits: Int, lastSeen: Int64, sources: [String]) -> FileCandidate {
