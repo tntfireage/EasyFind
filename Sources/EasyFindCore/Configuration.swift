@@ -35,13 +35,30 @@ public struct SyncConfig: Codable, Equatable {
     public var chromeTabs: Bool
     public var apps: Bool
     public var folders: Bool
+    public var files: Bool
 
-    public init(intervalMinutes: Int, chromeHistory: Bool, chromeTabs: Bool, apps: Bool, folders: Bool) {
+    public init(intervalMinutes: Int, chromeHistory: Bool, chromeTabs: Bool, apps: Bool,
+                folders: Bool, files: Bool = true) {
         self.intervalMinutes = intervalMinutes
         self.chromeHistory = chromeHistory
         self.chromeTabs = chromeTabs
         self.apps = apps
         self.folders = folders
+        self.files = files
+    }
+}
+
+public struct FileSearchConfig: Codable, Equatable {
+    /// Directories walked by the file index. `~` is expanded when scanning.
+    public var directories: [String]
+    /// Upper bound on indexed files per sync; protects against enormous trees.
+    public var maxFiles: Int
+
+    public static let defaultDirectories = ["~/Desktop", "~/Documents", "~/Downloads"]
+
+    public init(directories: [String] = FileSearchConfig.defaultDirectories, maxFiles: Int = 20_000) {
+        self.directories = directories
+        self.maxFiles = maxFiles
     }
 }
 
@@ -61,11 +78,14 @@ public struct ActionConfig: Codable, Equatable {
     public var web: ActionSet
     public var app: ActionSet
     public var folder: ActionSet
+    public var file: ActionSet
 
-    public init(web: ActionSet, app: ActionSet, folder: ActionSet) {
+    public init(web: ActionSet, app: ActionSet, folder: ActionSet,
+                file: ActionSet = ActionSet(enter: "open", commandEnter: "finder", optionEnter: "copy")) {
         self.web = web
         self.app = app
         self.folder = folder
+        self.file = file
     }
 }
 
@@ -82,17 +102,20 @@ public struct Configuration: Codable, Equatable {
     public var language: AppLanguage
     public var hotkey: HotkeyConfig
     public var sync: SyncConfig
+    public var files: FileSearchConfig
     public var actions: ActionConfig
     public var terminal: TerminalConfig
 
     public init(language: AppLanguage = .zh,
                 hotkey: HotkeyConfig,
                 sync: SyncConfig,
+                files: FileSearchConfig = FileSearchConfig(),
                 actions: ActionConfig,
                 terminal: TerminalConfig) {
         self.language = language
         self.hotkey = hotkey
         self.sync = sync
+        self.files = files
         self.actions = actions
         self.terminal = terminal
     }
@@ -105,12 +128,15 @@ public struct Configuration: Codable, Equatable {
             chromeHistory: true,
             chromeTabs: true,
             apps: true,
-            folders: true
+            folders: true,
+            files: true
         ),
+        files: FileSearchConfig(),
         actions: ActionConfig(
             web: ActionSet(enter: "open", commandEnter: "copy", optionEnter: "copy"),
             app: ActionSet(enter: "open", commandEnter: "finder", optionEnter: "copy"),
-            folder: ActionSet(enter: "open", commandEnter: "terminal", optionEnter: "copy")
+            folder: ActionSet(enter: "open", commandEnter: "terminal", optionEnter: "copy"),
+            file: ActionSet(enter: "open", commandEnter: "finder", optionEnter: "copy")
         ),
         terminal: TerminalConfig(application: "auto")
     )
@@ -154,6 +180,8 @@ public extension ActionConfig {
             set = app
         case .folder:
             set = folder
+        case .file:
+            set = file
         }
 
         let raw: String
@@ -177,6 +205,8 @@ public extension ActionConfig {
         case .app:
             return action == .terminal ? .open : action
         case .folder:
+            return action
+        case .file:
             return action
         }
     }
@@ -231,13 +261,27 @@ public enum ConfigurationLoader {
 
         result.sync.intervalMinutes = min(max(result.sync.intervalMinutes, 1), 1440)
 
+        result.files.maxFiles = min(max(result.files.maxFiles, 100), 200_000)
+        var directories: [String] = []
+        var seenDirectories = Set<String>()
+        for raw in result.files.directories {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.hasPrefix("/") || trimmed.hasPrefix("~") else { continue }
+            let key = (trimmed as NSString).expandingTildeInPath
+            if seenDirectories.insert(key).inserted {
+                directories.append(trimmed)
+            }
+        }
+        result.files.directories = directories.isEmpty ? FileSearchConfig.defaultDirectories : directories
+
         let terminal = result.terminal.application.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         result.terminal.application = ["auto", "iterm2", "terminal"].contains(terminal) ? terminal : "auto"
 
         result.actions = ActionConfig(
             web: normalize(result.actions.web),
             app: normalize(result.actions.app),
-            folder: normalize(result.actions.folder)
+            folder: normalize(result.actions.folder),
+            file: normalize(result.actions.file)
         )
 
         return result

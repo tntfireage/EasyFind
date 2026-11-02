@@ -2,13 +2,13 @@
 
 # EasyFind
 
-macOS 菜单栏启动器：按一下快捷键，快速搜索并打开**网页地址、本机应用或目录**。
+macOS 菜单栏启动器：按一下快捷键，快速搜索并打开**网页地址、本机应用、目录或常用文件**。
 
-浏览器会清空历史，EasyFind 不会。它把 Chrome/Chromium 系、Firefox、Safari 的历史按 host 聚合后存进自己的 SQLite，把打开的标签页存成完整 URL 书签，把已安装应用和最近访问过的目录也纳入同一个搜索面板。网页档案只增不删；应用/目录则反映当前机器状态。
+浏览器会清空历史，EasyFind 不会。它把 Chrome/Chromium 系、Firefox、Safari 的历史按 host 聚合后存进自己的 SQLite，把打开的标签页存成完整 URL 书签，把已安装应用、最近访问过的目录，以及配置目录中的常用文件也纳入同一个搜索面板。网页档案只增不删；应用/目录/文件则反映当前机器状态。
 
 - Bundle ID：`com.local.easyfind`（改名后保持不变，用于延续权限与登录项）
 - 数据目录：`~/Library/Application Support/easyfind/`
-- 当前 schema：`user_version = 3`
+- 当前 schema：`user_version = 4`
 
 ---
 
@@ -24,8 +24,6 @@ macOS 菜单栏启动器：按一下快捷键，快速搜索并打开**网页地
 - [搜索与排序](#搜索与排序)
 - [按键与动作](#按键与动作)
 - [权限](#权限)
-- [开发与调试](#开发与调试)
-- [故障排查](#故障排查)
 - [隐私与安全](#隐私与安全)
 - [已知限制](#已知限制)
 - [授权](#授权)
@@ -50,7 +48,10 @@ EasyFind 是一个常驻菜单栏的 `LSUIElement` 应用：没有 Dock 图标�
 │  ├────────────────────┤                 │  deep_links    │      │      │ │
 │  │ Cursor/VS Code     │ state.vscdb      │  apps          │      │      │ │
 │  │ Finder 最近文件夹   │ 书签解析          │  folders       │      └──┬───┘ │
-│  │ zsh 绝对路径 cd     │ 历史文件          │                │         │     │
+│  │ zsh 绝对路径 cd     │ 历史文件          │  files         │         │     │
+│  ├────────────────────┤                 │                │         │     │
+│  │ 配置目录文件扫描    │ 后台队列遍历       │                │         │     │
+│  │ 系统最近使用文件    │ Spotlight 元数据   │                │         │     │
 │  └────────────────────┘                 └────────────────┘         │     │
 │                                                                     ▼     │
 │                                            默认浏览器 / 应用 / Finder /    │
@@ -61,14 +62,15 @@ EasyFind 是一个常驻菜单栏的 `LSUIElement` 应用：没有 Dock 图标�
 关键设计：
 
 - **采集与 UI 在同一进程**，但采集在后台队列，面板只读内存索引，不阻塞输入。
-- **网页档案与目录语义不同**：网页只 upsert、永不删除；应用目录卸载即移除；目录行保留但缺失目录不进入索引。
+- **网页档案与磁盘语义不同**：网页只 upsert、永不删除；应用目录卸载即移除；目录/文件行保留但缺失路径不进入索引。
+- **文件扫描在后台队列**：目录遍历不阻塞面板；搜索只读内存索引。
 - **全路径去重**：目录以规范化真实路径为唯一键，跨来源合并。
 
 ---
 
 ## 功能一览
 
-EasyFind 把“找东西并打开”收敛到一个面板，覆盖网页、应用、目录和手动收藏四类目标。
+EasyFind 把“找东西并打开”收敛到一个面板，覆盖网页、应用、目录、文件和手动收藏五类目标。
 
 ### 网页档案
 
@@ -90,9 +92,16 @@ EasyFind 把“找东西并打开”收敛到一个面板，覆盖网页、应�
 - 唯一键是规范化全路径；符号链接、尾斜杠、大小写变体会合并为一条。
 - 输入 `~` 只看目录；默认动作：Enter Finder，⌘Enter iTerm2/Terminal，⌥Enter 复制完整路径。
 
+### 文件搜索
+
+- 后台扫描 `config.json` 中 `files.directories` 配置的目录（默认桌面、文稿、下载），只索引文件名与路径，**不读取文件内容**。
+- 合并系统“最近使用”文档（Spotlight 的 `kMDItemLastUsedDate`）与 EasyFind 内的打开次数，空查询时优先展示最常用的文件。
+- 自动跳过隐藏文件、`.app` 等包、`node_modules`、`.build`、`Caches`、`Library` 等噪声目录，以及 `/System`、`/usr`、`/bin`、`/sbin`、`/Library`、`/Applications` 等系统位置；`/usr/local`、`/opt/homebrew` 例外。
+- 输入 `@` 只看文件；默认动作：Enter 打开，⌘Enter 在 Finder 中显示，⌥Enter 复制完整路径。
+
 ### 搜索
 
-- 统一匹配 host、标题、别名、URL 片段、应用名、bundle id、目录名和完整路径。
+- 统一匹配 host、标题、别名、URL 片段、应用名、bundle id、目录名、文件名和完整路径。
 - 大小写不敏感；空格分隔的多个关键词按 AND 处理。
 - 排序：精确匹配 → 前缀 → 子串 → 其他字段；同层按访问次数和时间。
 - URL 路径做 percent-decode，`#锚点`参与，`?查询串`不参与。
@@ -100,16 +109,17 @@ EasyFind 把“找东西并打开”收敛到一个面板，覆盖网页、应�
 ### 交互与配置
 
 - 全局热键（默认 ⌘G，可换 Space 组合）或菜单栏图标唤起；无 Dock 图标、不自动弹窗。
-- `config.json` 配置热键、同步间隔与来源开关、三类结果 × 三种修饰键的动作、终端偏好和界面语言，支持热重载。
+- `config.json` 配置热键、同步间隔与来源开关、各类结果 × 三种修饰键的动作、终端偏好和界面语言，支持热重载。
 - 界面语言默认中文，可切换 English 或跟随系统。
-- 菜单提供立即同步、添加地址、打开配置/数据目录、清除目录历史、完全磁盘访问设置。
+- 菜单提供立即同步、添加地址、打开配置/数据目录、清除目录历史、清除文件索引、完全磁盘访问设置。
 - 登录项自动注册；启动后后台同步。
 
 ### 本地与容错
 
 - 采集和索引全部在本机完成，应用不发网络请求；数据库 `0600`、目录 `0700`。
 - 浏览器缺失、锁定或无权限时只跳过该来源；Safari 无完全磁盘访问时给一次性引导。
-- 网页档案只增不删；应用和目录反映当前机器状态。
+- 文件扫描在后台同步队列执行，受 `files.maxFiles` 上限保护；桌面/文稿/下载首次访问时由 macOS 请求“文件与文件夹”权限。
+- 网页档案只增不删；应用、目录和文件反映当前机器状态。
 
 ---
 
@@ -134,7 +144,7 @@ make install    # 等同于 ./install.sh
 make uninstall
 ```
 
-安装脚本会先让你选择界面语言（中文 / English / Auto），之后的配置提示、确认和结果都使用该语言；然后询问热键、同步来源与间隔、终端偏好。已有配置默认保留，也可以选择重新配置；写入时会保留 `actions` 和未知键。
+安装脚本会先让你选择界面语言（中文 / English / Auto），之后的配置提示、确认和结果都使用该语言；然后询问热键、同步来源与间隔（含常用文件搜索）、终端偏好。已有配置默认保留，也可以选择重新配置；写入时会保留 `actions`、`files` 和未知键。
 
 ### 依赖
 
@@ -171,8 +181,13 @@ make uninstall
 {
   "actions": {
     "app": { "enter": "open", "commandEnter": "finder", "optionEnter": "copy" },
+    "file": { "enter": "open", "commandEnter": "finder", "optionEnter": "copy" },
     "folder": { "enter": "open", "commandEnter": "terminal", "optionEnter": "copy" },
     "web": { "enter": "open", "commandEnter": "copy", "optionEnter": "copy" }
+  },
+  "files": {
+    "directories": ["~/Desktop", "~/Documents", "~/Downloads"],
+    "maxFiles": 20000
   },
   "hotkey": { "key": "g", "modifiers": ["command"] },
   "language": "zh",
@@ -180,6 +195,7 @@ make uninstall
     "apps": true,
     "chromeHistory": true,
     "chromeTabs": true,
+    "files": true,
     "folders": true,
     "intervalMinutes": 10
   },
@@ -219,8 +235,18 @@ make uninstall
 | `chromeTabs` | Chrome 标签页 |
 | `apps` | 已安装应用 |
 | `folders` | 目录历史 |
+| `files` | 常用文件索引（扫描 `files.directories` + 系统最近使用） |
 
 关闭某个来源不会删除已有数据，只是不再刷新。
+
+### files
+
+| 字段 | 说明 |
+|---|---|
+| `directories` | 要索引的目录，支持 `~`；默认 `~/Desktop`、`~/Documents`、`~/Downloads` |
+| `maxFiles` | 单轮索引的文件上限，100–200000，默认 20000 |
+
+系统位置（`/System`、`/usr`、`/bin`、`/sbin`、`/Library`、`/Applications` 等）不会被索引；`/usr/local` 与 `/opt/homebrew` 例外。隐藏文件、`.app` 包和 `node_modules`/`.build` 等噪声目录会自动跳过。只保存文件名与路径，不读取文件内容。
 
 ### actions
 
@@ -234,12 +260,12 @@ make uninstall
 
 动作词表：
 
-| 动作 | 网页 | 应用 | 目录 |
-|---|---|---|---|
-| `open` | 默认浏览器 | 启动 | Finder |
-| `copy` | 复制 URL | 复制 bundle 路径 | 复制完整路径 |
-| `terminal` | 回退 `open` | 回退 `open` | iTerm2 / Terminal 打开 |
-| `finder` | 回退 `open` | 在 Finder 中显示 | Finder |
+| 动作 | 网页 | 应用 | 目录 | 文件 |
+|---|---|---|---|---|
+| `open` | 默认浏览器 | 启动 | Finder | 默认应用打开 |
+| `copy` | 复制 URL | 复制 bundle 路径 | 复制完整路径 | 复制完整路径 |
+| `terminal` | 回退 `open` | 回退 `open` | iTerm2 / Terminal 打开 | 在父目录打开终端 |
+| `finder` | 回退 `open` | 在 Finder 中显示 | Finder | 在 Finder 中显示 |
 
 未知动作或不支持的动作组合一律回退到 `open`。
 
@@ -275,11 +301,12 @@ make uninstall
 | 重新加载配置 | 立即应用配置修改 |
 | 完全磁盘访问设置 | 打开 Safari 历史所需的权限面板 |
 | 清除目录历史 | 只删除 EasyFind 的目录索引 |
+| 清除文件索引 | 只删除文件索引与打开次数，不删除文件 |
 | 退出 | 退出应用 |
 
 ### 空查询
 
-手动添加的条目在前，随后是历史 host（按访问次数降序）。应用、书签、深链只在搜索中出现；目录在搜索或 `~` 模式下出现。
+手动添加的条目在前，随后是最常用的文件（最多 8 个），再后是历史 host（按访问次数降序）。应用、书签、深链只在搜索中出现；目录在搜索或 `~` 模式下出现，文件在搜索或 `@` 模式下出现。
 
 ### 搜索语法
 
@@ -287,7 +314,9 @@ make uninstall
 - 网页：匹配 host、标题、别名、URL 路径与 `#锚点`；`?查询串` 不参与（多为跟踪参数）。
 - 应用：匹配显示名与 bundle id。
 - 目录：匹配目录名与**完整路径**。
+- 文件：匹配文件名与**完整路径**。
 - `~` 开头进入目录模式：只输入 `~` 列出最近目录，`~mytools` 继续过滤。
+- `@` 开头进入文件模式：只输入 `@` 按常用程度列出文件，`@report` 继续过滤。
 
 ### 结果动作
 
@@ -298,6 +327,7 @@ make uninstall
 | 网页 / 标签页 / 手动地址 | 默认浏览器打开 | 复制 URL | 复制 URL |
 | 应用 | 启动应用 | 在 Finder 中显示 | 复制 bundle 路径 |
 | 目录 | Finder 打开 | iTerm2 新窗口并 `cd`（未安装/失败时回退 Terminal） | 复制完整路径 |
+| 文件 | 默认应用打开 | 在 Finder 中显示 | 复制完整路径 |
 
 `↑`/`↓` 选择，`Enter` 或单击激活，`Esc` 关闭。
 
@@ -315,6 +345,8 @@ make uninstall
 | Chrome 标签页 | AppleScript 读取窗口/标签标题与 URL | 每轮，Chrome 未运行则跳过 | 自动化 | 完整 URL + 标题 |
 | 已安装应用 | 扫描 5 个标准目录，读 bundle 元数据 | 每轮 | 无 | 名称、bundle id、路径、启动次数 |
 | 目录历史 | Cursor/VS Code `state.vscdb`、Finder `FXRecentFolders`、zsh 历史 | 每轮 | 无 | 规范化全路径、来源、次数 |
+| 常用文件（扫描） | 后台队列遍历 `files.directories` | 每轮 | **文件与文件夹**（首次访问桌面/文稿/下载时弹窗） | 规范化路径、名称、修改时间 |
+| 系统最近使用文件 | Spotlight `kMDItemLastUsedDate` | 每轮 | **文件与文件夹** | 最近使用时间 |
 | 手动条目 | 应用内添加 | 即时 | 无 | URL + 别名 |
 
 细节：
@@ -326,6 +358,7 @@ make uninstall
 - **应用**：`/Applications`、`/Applications/Utilities`、`/System/Applications`、`/System/Applications/Utilities`、`~/Applications` 的顶层 `.app`；按 bundle id 去重，`/Applications` 优先；嵌套 helper 不扫描。
 - **目录**：只收绝对路径和 `~` 路径的 `cd`（相对路径无法还原当时 cwd）；编辑器取 `folderUri` 与 `fileUri` 的父目录；Finder 解析书签；包（`.app`、`.cannedSearch` 等）排除。
 - **目录去重**：符号链接解析 + 标准化 + 去尾部 `/`，唯一键为小写全路径；跨来源合并次数/时间/来源标签。
+- **文件**：只扫描 `files.directories` 中存在的目录；每轮最多 `files.maxFiles` 个文件；隐藏文件、包、符号链接和噪声目录跳过；系统位置不索引（`/usr/local`、`/opt/homebrew` 例外）。系统“最近使用”通过 Spotlight 按目录范围查询，与扫描结果按规范化路径合并，`last_seen` 取较新值。文件缺失时在读取快照阶段过滤，打开次数保留。
 
 ---
 
@@ -336,7 +369,7 @@ make uninstall
 ```
 
 - 目录 `0700`，数据库 `0600`，SQLite WAL。
-- schema 通过 `PRAGMA user_version` 迁移；当前为 3（v1 网页、v2 应用、v3 目录）。
+- schema 通过 `PRAGMA user_version` 迁移；当前为 4（v1 网页、v2 应用、v3 目录、v4 文件）。
 
 ### `entries`
 
@@ -385,6 +418,20 @@ make uninstall
 
 `path_key` 与 `path` 均唯一。缺失目录不进入索引但保留行，卷重新挂载后可再次出现。
 
+### `files`
+
+| 列 | 说明 |
+|---|---|
+| `path_key` | 小写规范化全路径，去重键 |
+| `path` | 规范化完整路径（展示/打开） |
+| `name` | 文件名 |
+| `visits` | 来源观测次数（当前为 0，保留字段） |
+| `own_opens` | 通过 EasyFind 打开的次数 |
+| `last_seen` | 最近使用时间（系统最近使用优先，其次文件修改时间） |
+| `sources` | `scan,recent` 的组合 |
+
+`path_key` 与 `path` 均唯一。缺失文件在读取快照时过滤，行与打开次数保留。
+
 ---
 
 ## 搜索与排序
@@ -399,10 +446,12 @@ make uninstall
 | 深链 | `host + 路径与 #锚点 + title` |
 | 应用 | `name + bundle id` |
 | 目录 | `name + 完整路径` |
+| 文件 | `name + 完整路径` |
 
 3. 排序层级：精确匹配 → 前缀 → 子串 → 其他字段；同层级按 `visits`、`last_seen`、路径字典序。
-4. 空查询不参与上述搜索，直接返回“手动条目 + 历史”。
+4. 空查询不参与上述搜索，直接返回“手动条目 + 最常用文件（最多 8 个）+ 历史”。
 5. `~` 模式只在目录集合内搜索；`~` 后为空时按访问次数/时间列出最近目录。
+6. `@` 模式只在文件集合内搜索；`@` 后为空时按打开次数/最近使用列出文件。
 
 ---
 
@@ -412,8 +461,8 @@ make uninstall
 |---|---|
 | `⌘G`（可改） | 唤起/隐藏面板 |
 | `↑` / `↓` | 移动选中项 |
-| `Enter` | 执行 `actions.<kind>.enter`（默认：网页→浏览器、应用→启动、目录→Finder） |
-| `⌘Enter` | 执行 `actions.<kind>.commandEnter`（默认：目录→iTerm2、应用→Finder 中显示、网页→复制 URL） |
+| `Enter` | 执行 `actions.<kind>.enter`（默认：网页→浏览器、应用→启动、目录→Finder、文件→默认应用） |
+| `⌘Enter` | 执行 `actions.<kind>.commandEnter`（默认：目录→iTerm2、应用/文件→Finder 中显示、网页→复制 URL） |
 | `⌥Enter` | 执行 `actions.<kind>.optionEnter`（默认：全部复制 URL/路径） |
 | `Esc` | 关闭面板 |
 
@@ -433,6 +482,7 @@ make uninstall
 | 读取 Safari 历史 | 完全磁盘访问 | 系统设置中手动添加 EasyFind，添加后重启 |
 | 读取 Chrome 标签页 | 自动化 | 首次弹窗 |
 | 在 iTerm2 中打开目录 | 自动化 | 首次弹窗；拒绝则回退 Terminal |
+| 扫描桌面/文稿/下载等配置目录 | 文件与文件夹 | 首次访问时弹窗；拒绝后该目录为空，可在系统设置中重新授权 |
 | 登录项 | `SMAppService` | 系统设置 → 通用 → 登录项 |
 
 如果拒绝自动化权限：
@@ -447,86 +497,13 @@ Safari 历史未授权时会被跳过，其他浏览器继续同步；菜单栏 
 
 ---
 
-## 开发与调试
-
-仅用于本地调试的环境变量：
-
-| 变量 | 作用 |
-|---|---|
-| `EASYFIND_DATA_DIR` | 覆盖数据库与配置文件目录 |
-| `EASYFIND_CHROME_ROOT` | 覆盖 Chrome Profile 根目录 |
-| `EASYFIND_SYNC_INTERVAL` | 覆盖同步间隔（秒） |
-| `EASYFIND_DISABLE_TABS` | `1` 跳过标签页采集（避免触发授权） |
-| `EASYFIND_DISABLE_LOGIN_ITEM` | `1` 不注册登录项 |
-
-用夹具数据启动：
-
-```bash
-EASYFIND_DATA_DIR=/tmp/ef/data \
-EASYFIND_CHROME_ROOT=/tmp/ef/chrome \
-EASYFIND_DISABLE_TABS=1 EASYFIND_DISABLE_LOGIN_ITEM=1 \
-./EasyFind.app/Contents/MacOS/EasyFind
-```
-
-日志（Unified Logging）：
-
-```bash
-/usr/bin/log show --last 10m --predicate 'process == "EasyFind"' --info --private --style compact
-```
-
-常用关键字：
-
-| 日志 | 含义 |
-|---|---|
-| `indexed N app(s)` | 应用扫描结果 |
-| `indexed N folder(s)` | 目录扫描结果 |
-| `captured N tab(s)` | 标签页采集结果 |
-| `AppleScript returned N chars` | Chrome AppleScript 返回长度 |
-| `folder action finder/iterm2/terminal/copy` | 目录动作 |
-| `panel shown in X ms` | 面板唤起耗时 |
-
-数据库只读排查：
-
-```bash
-DB="$HOME/Library/Application Support/easyfind/easyfind.db"
-sqlite3 "$DB" "PRAGMA user_version;"
-sqlite3 "$DB" "SELECT kind, COUNT(*) FROM entries GROUP BY kind;"
-sqlite3 "$DB" "SELECT COUNT(*), COUNT(DISTINCT path_key) FROM folders;"
-sqlite3 "$DB" "SELECT COUNT(*) FROM apps;"
-```
-
----
-
-## 故障排查
-
-| 现象 | 排查 |
-|---|---|
-| 热键无反应 | 是否与系统/应用快捷键冲突；菜单栏 → 快捷键换一个；确认 EasyFind 在运行 |
-| 菜单栏出现两个图标 | 同时运行了仓库副本和 `/Applications` 副本；卸载仓库副本或只保留一份 |
-| 面板不出现 | 检查分析日志；确认没有另一个 EasyFind 实例占用 |
-| 自动化弹窗被拒绝 | 系统设置 → 隐私与安全性 → 自动化 → 勾选 EasyFind → Google Chrome / iTerm2 |
-| 标签页书签为 0 | Chrome 未运行、没有窗口，或自动化未授权；日志看 `captured N tab(s)` |
-| Safari 历史为 0 | 未授予完全磁盘访问；菜单“完全磁盘访问设置”添加 EasyFind 后重启 |
-| 其他浏览器历史为 0 | 确认对应目录/Profile 存在；日志看 `chrome/brave/firefox history: N host(s)` |
-| ⌘Enter 打开的是 Terminal | iTerm2 未安装、不是 `com.googlecode.iterm2`，或 AppleScript 失败；日志看 `iTerm2 AppleScript failed` |
-| 目录少了 | 相对路径 `cd` 不索引；确认来源在 Cursor/VS Code 最近列表或 Finder 最近文件夹中 |
-| 目录重复 | 正常情况下 `COUNT(*) == COUNT(DISTINCT path_key)`；若不等，报告日志 |
-| 应用缺失 | 确认是顶层 `.app`、有可执行文件、位于 5 个扫描目录之一 |
-| 登录项失效 | 移动 app 后重新打开；在系统设置里删除旧记录再添加 |
-| 配置改了没生效 | 菜单栏 → “重新加载配置”，或重新打开面板；同步间隔变化在重载后重排 |
-| 热键失效 | 键名/修饰键无法映射时会回退 ⌘G；查日志 `unsupported hotkey` |
-| config.json 写错 | 会回退默认配置且不覆盖文件；修好后重新加载 |
-| 数据损坏/想重来 | 退出 EasyFind，删除 `~/Library/Application Support/easyfind/`（会丢失网页档案） |
-
----
-
 ## 隐私与安全
 
 - 所有数据仅保存在本机 `~/Library/Application Support/easyfind/`，目录 `0700`、数据库 `0600`。
 - 应用不发起任何网络请求；`lsof -a -p <pid> -i` 为空。
-- 命令历史**不采集**；目录历史只存路径。
+- 命令历史**不采集**；目录历史只存路径；文件索引只存文件名、路径与使用时间，**不读取文件内容**。
 - 网页档案的“只增不删”是刻意设计：浏览器清空后仍可恢复。若需要彻底删除，退出应用后删除数据目录。
-- 目录路径可能包含敏感项目名，仍仅存储在本地；可用菜单“清除目录历史”。
+- 目录路径和文件名可能包含敏感项目名，仍仅存储在本地；可用菜单“清除目录历史”“清除文件索引”。
 
 ---
 
@@ -539,6 +516,8 @@ sqlite3 "$DB" "SELECT COUNT(*) FROM apps;"
 - 应用只扫描 5 个目录的顶层 `.app`；应用只参与搜索，不出现在空查询列表。
 - 相对路径 `cd` 无法还原；目录历史只收绝对路径和 `~` 路径；包会被排除。
 - 目录来源目前是 Cursor、VS Code、Finder 和 zsh。
+- 文件搜索只覆盖配置目录，不做整盘全文检索；系统位置不索引；默认最多 20000 个文件。
+- 系统“最近使用”依赖 Spotlight 元数据；Spotlight 关闭或未索引的目录只能按文件修改时间排序。
 - 未公证、ad-hoc 签名，仅建议本机自用。
 
 ---

@@ -118,6 +118,17 @@ final class SyncCoordinator {
                 NSLog("EasyFind: indexed %d folder(s)", folders.count)
             }
 
+            if configuration.sync.files {
+                let directories = configuration.files.directories
+                let scanned = FileScanner.scan(directories: directories,
+                                               maxFiles: configuration.files.maxFiles)
+                let recent = RecentFilesScanner.scan(directories: directories, limit: 300)
+                let files = FileCatalog.merge(scanned: scanned, recent: recent,
+                                              directories: directories)
+                try store.replaceFiles(files)
+                NSLog("EasyFind: indexed %d file(s) from %d recent", files.count, recent.count)
+            }
+
             let snapshot = try store.snapshot()
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -125,7 +136,8 @@ final class SyncCoordinator {
                     entries: snapshot.entries,
                     deepLinks: snapshot.deepLinks,
                     apps: snapshot.apps,
-                    folders: snapshot.folders
+                    folders: snapshot.folders,
+                    files: snapshot.files
                 )
                 self.onUpdate?()
             }

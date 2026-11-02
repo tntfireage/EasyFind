@@ -276,6 +276,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return strings.emptyNoData }
         if trimmed == "~" { return strings.emptyNoFolders }
+        if trimmed == "@" { return strings.emptyNoFiles }
         return strings.emptyNoResults
     }
 
@@ -322,9 +323,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         case .copy:
             copyTarget(entry)
         case .terminal:
-            if entry.kind == .folder {
+            switch entry.kind {
+            case .folder:
                 _ = openInPreferredTerminal(path: entry.openTarget)
-            } else {
+            case .file:
+                _ = openInPreferredTerminal(path: Self.parentDirectory(of: entry.openTarget))
+            default:
                 openDefault(entry)
             }
         case .finder:
@@ -342,6 +346,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             )
         case .folder:
             NSWorkspace.shared.open(URL(fileURLWithPath: entry.openTarget))
+        case .file:
+            NSWorkspace.shared.open(URL(fileURLWithPath: entry.openTarget))
         default:
             if let url = URL(string: entry.openTarget) {
                 NSWorkspace.shared.open(url)
@@ -356,7 +362,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func reveal(_ entry: IndexEntry) {
-        if entry.kind == .app {
+        if entry.kind == .app || entry.kind == .file {
             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.openTarget)])
         } else {
             openDefault(entry)
@@ -369,6 +375,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             try? store.recordAppOpen(id: entry.id)
         case .folder:
             try? store.recordFolderOpen(id: entry.id)
+        case .file:
+            try? store.recordFileOpen(id: entry.id)
         default:
             if entry.id != 0 {
                 try? store.recordOpen(id: entry.id)
@@ -460,7 +468,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
 
     private func icon(for entry: IndexEntry) -> NSImage? {
-        if entry.kind == .app {
+        if entry.kind == .app || entry.kind == .file {
             if let cached = iconCache[entry.openTarget] {
                 return cached
             }
@@ -490,7 +498,20 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return strings.appSubtitle
         case .folder:
             return entry.openTarget
+        case .file:
+            let parent = Self.abbreviatedPath(Self.parentDirectory(of: entry.openTarget))
+            return entry.visits > 0 ? "\(parent) · \(strings.visits(entry.visits))" : parent
         }
+    }
+
+    private static func parentDirectory(of path: String) -> String {
+        (path as NSString).deletingLastPathComponent
+    }
+
+    private static func abbreviatedPath(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        guard path == home || path.hasPrefix(home + "/") else { return path }
+        return "~" + path.dropFirst(home.count)
     }
 
     private static func pathText(_ rawURL: String) -> String {

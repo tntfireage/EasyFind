@@ -2,13 +2,13 @@
 
 # EasyFind
 
-A macOS menu-bar launcher: one hotkey to search and open **web addresses, local applications, or folders**.
+A macOS menu-bar launcher: one hotkey to search and open **web addresses, local applications, folders, or frequently used files**.
 
-Browsers clear their history; EasyFind doesn't. It aggregates the history of Chrome/Chromium-family browsers, Firefox, and Safari by host into its own SQLite database, saves open tabs as full-URL bookmarks, and adds installed applications and recently visited folders to the same search panel. The web archive is append-only; the app and folder catalogs reflect the current machine state.
+Browsers clear their history; EasyFind doesn't. It aggregates the history of Chrome/Chromium-family browsers, Firefox, and Safari by host into its own SQLite database, saves open tabs as full-URL bookmarks, and adds installed applications, recently visited folders, and frequently used files from configured directories to the same search panel. The web archive is append-only; the app, folder, and file catalogs reflect the current machine state.
 
 - Bundle ID: `com.local.easyfind` (kept after the rename to preserve permissions and the login item)
 - Data directory: `~/Library/Application Support/easyfind/`
-- Current schema: `user_version = 3`
+- Current schema: `user_version = 4`
 
 ---
 
@@ -24,8 +24,6 @@ Browsers clear their history; EasyFind doesn't. It aggregates the history of Chr
 - [Search and ranking](#search-and-ranking)
 - [Keys and actions](#keys-and-actions)
 - [Permissions](#permissions)
-- [Development and debugging](#development-and-debugging)
-- [Troubleshooting](#troubleshooting)
 - [Privacy and security](#privacy-and-security)
 - [Known limitations](#known-limitations)
 - [License](#license)
@@ -48,10 +46,13 @@ EasyFind is an `LSUIElement` menu-bar app: it has no Dock icon, and the panel ap
 │  │ Chrome open tabs   │ AppleScript │  deep_links    │    └─────┬──────┘ │
 │  ├────────────────────┤             │  apps          │          │        │
 │  │ Installed apps     │ scan roots  │  folders       │          ▼        │
-│  ├────────────────────┤             └────────────────┘  browser / app /  │
-│  │ Cursor / VS Code   │ state.vscdb                    Finder / iTerm2 / │
-│  │ Finder recents     │ bookmarks                      Terminal /        │
-│  │ zsh absolute cd    │ history files                  clipboard         │
+│  │                    │             │  files         │  browser / app /  │
+│  ├────────────────────┤             └────────────────┘  Finder / iTerm2 / │
+│  │ Cursor/VS Code,    │ state.vscdb,                   Terminal /        │
+│  │ Finder, zsh cd     │ bookmarks                      clipboard         │
+│  ├────────────────────┤                                                  │
+│  │ Configured folders │ background walk                                  │
+│  │ Recent documents   │ Spotlight metadata                               │
 │  └────────────────────┘                                                  │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -59,14 +60,15 @@ EasyFind is an `LSUIElement` menu-bar app: it has no Dock icon, and the panel ap
 Key design points:
 
 - **Collection and UI share one process**, but collection runs on a background queue; the panel reads an in-memory index and never blocks typing.
-- **The web archive and the catalogs have different semantics**: web entries are upsert-only and never deleted; apps are removed when uninstalled; folder rows are kept but missing directories are filtered out of the index.
-- **Full-path deduplication**: folders are keyed by a canonical real path and merged across sources.
+- **The web archive and the catalogs have different semantics**: web entries are upsert-only and never deleted; apps are removed when uninstalled; folder/file rows are kept but missing paths are filtered out of the index.
+- **Full-path deduplication**: folders and files are keyed by a canonical real path and merged across sources.
+- **File scanning stays off the UI thread**: directory walking runs on the background sync queue; search reads the in-memory index.
 
 ---
 
 ## Features
 
-EasyFind turns "find it and open it" into one panel covering four kinds of targets: web pages, applications, folders, and manual bookmarks.
+EasyFind turns "find it and open it" into one panel covering five kinds of targets: web pages, applications, folders, files, and manual bookmarks.
 
 ### Web archive
 
@@ -88,9 +90,16 @@ EasyFind turns "find it and open it" into one panel covering four kinds of targe
 - The key is the canonical full path; symlinks, trailing slashes, and case variants merge into one row.
 - Type `~` for folder-only results; default actions: Enter opens Finder, ⌘Enter opens iTerm2/Terminal, ⌥Enter copies the full path.
 
+### Files
+
+- Scans the directories configured in `files.directories` (Desktop, Documents, and Downloads by default) on a background queue and indexes file names and paths only; file contents are never read.
+- Merges the system's recently used documents (Spotlight `kMDItemLastUsedDate`) with EasyFind open counts, so the most-used files appear first in the empty-query list.
+- Skips hidden files, packages such as `.app`, noise directories (`node_modules`, `.build`, `Caches`, `Library`), and system locations (`/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/Applications`); `/usr/local` and `/opt/homebrew` are exempt.
+- Type `@` for file-only results; default actions: Enter opens, ⌘Enter reveals in Finder, ⌥Enter copies the full path.
+
 ### Search
 
-- Matches host, title, alias, URL fragment, app name, bundle ID, folder name, and full path in one list.
+- Matches host, title, alias, URL fragment, app name, bundle ID, folder name, file name, and full path in one list.
 - Case-insensitive; whitespace-separated tokens are ANDed.
 - Ranking: exact → prefix → substring → other fields; ties by visits and recency.
 - URL paths are percent-decoded; `#fragments` match, `?query` strings do not.
@@ -98,16 +107,17 @@ EasyFind turns "find it and open it" into one panel covering four kinds of targe
 ### Interaction and configuration
 
 - Summon with a global hotkey (⌘G by default, Space combos available) or the menu-bar icon; no Dock icon, no spontaneous panel.
-- `config.json` controls the hotkey, sync interval and source switches, three result types × three modifiers, terminal preference, and UI language, with hot reload.
+- `config.json` controls the hotkey, sync interval and source switches, all result types × three modifiers, terminal preference, and UI language, with hot reload.
 - UI language defaults to Chinese; switch to English or follow the system in the config.
-- The menu offers sync now, add address, open config/data folder, clear folder history, and Full Disk Access settings.
+- The menu offers sync now, add address, open config/data folder, clear folder history, clear file index, and Full Disk Access settings.
 - The login item is registered automatically; collection runs in the background after launch.
 
 ### Local-first and failure isolation
 
 - All collection and indexing happen on-device; the app makes no network requests. Database `0600`, directory `0700`.
 - A missing, locked, or unauthorized browser is skipped on its own; Safari gets a one-time Full Disk Access guide.
-- The web archive is append-only; apps and folders reflect the current machine state.
+- File scanning runs on the background sync queue and is bounded by `files.maxFiles`; macOS asks for Files and Folders access the first time Desktop/Documents/Downloads are read.
+- The web archive is append-only; apps, folders, and files reflect the current machine state.
 
 ---
 
@@ -132,7 +142,7 @@ make install    # same as ./install.sh
 make uninstall
 ```
 
-The installer asks for the UI language first (中文 / English / Auto); every later prompt, confirmation, and message uses that language. It then asks for the hotkey, sync sources and interval, and terminal preference. An existing config is kept by default or can be reconfigured; `actions` and unknown keys are preserved when writing.
+The installer asks for the UI language first (中文 / English / Auto); every later prompt, confirmation, and message uses that language. It then asks for the hotkey, sync sources and interval (including frequent-file search), and terminal preference. An existing config is kept by default or can be reconfigured; `actions`, `files`, and unknown keys are preserved when writing.
 
 ### Dependencies
 
@@ -169,8 +179,13 @@ The login item is registered through `SMAppService.mainApp`; keep the app in `/A
 {
   "actions": {
     "app": { "enter": "open", "commandEnter": "finder", "optionEnter": "copy" },
+    "file": { "enter": "open", "commandEnter": "finder", "optionEnter": "copy" },
     "folder": { "enter": "open", "commandEnter": "terminal", "optionEnter": "copy" },
     "web": { "enter": "open", "commandEnter": "copy", "optionEnter": "copy" }
+  },
+  "files": {
+    "directories": ["~/Desktop", "~/Documents", "~/Downloads"],
+    "maxFiles": 20000
   },
   "hotkey": { "key": "g", "modifiers": ["command"] },
   "language": "zh",
@@ -178,6 +193,7 @@ The login item is registered through `SMAppService.mainApp`; keep the app in `/A
     "apps": true,
     "chromeHistory": true,
     "chromeTabs": true,
+    "files": true,
     "folders": true,
     "intervalMinutes": 10
   },
@@ -217,8 +233,18 @@ An unmappable key falls back to **⌘G** and is logged. The menu-bar "Hotkey" su
 | `chromeTabs` | Chrome tabs |
 | `apps` | Installed applications |
 | `folders` | Folder history |
+| `files` | File index (scans `files.directories` plus system recents) |
 
 Disabling a source does not delete existing data; it only stops refreshing it.
+
+### files
+
+| Field | Description |
+|---|---|
+| `directories` | Directories to index; `~` is expanded. Defaults to `~/Desktop`, `~/Documents`, `~/Downloads` |
+| `maxFiles` | Per-sync file cap, 100–200000, default 20000 |
+
+System locations (`/System`, `/usr`, `/bin`, `/sbin`, `/Library`, `/Applications`, and similar) are never indexed; `/usr/local` and `/opt/homebrew` are exempt. Hidden files, `.app` packages, and noise directories such as `node_modules`/`.build` are skipped. Only file names and paths are stored; contents are never read.
 
 ### actions
 
@@ -232,12 +258,12 @@ Each result type has three action slots:
 
 Action vocabulary:
 
-| Action | Web | App | Folder |
-|---|---|---|---|
-| `open` | default browser | launch | Finder |
-| `copy` | copy URL | copy bundle path | copy full path |
-| `terminal` | fall back to `open` | fall back to `open` | open in iTerm2 / Terminal |
-| `finder` | fall back to `open` | reveal in Finder | Finder |
+| Action | Web | App | Folder | File |
+|---|---|---|---|---|
+| `open` | default browser | launch | Finder | open with default app |
+| `copy` | copy URL | copy bundle path | copy full path | copy full path |
+| `terminal` | fall back to `open` | fall back to `open` | open in iTerm2 / Terminal | open terminal at parent folder |
+| `finder` | fall back to `open` | reveal in Finder | Finder | reveal in Finder |
 
 Unknown actions and unsupported combinations fall back to `open`.
 
@@ -275,11 +301,12 @@ Unknown actions and unsupported combinations fall back to `open`.
 | Reload Configuration | Apply configuration changes immediately |
 | Full Disk Access Settings | Open the privacy pane required for Safari history |
 | Clear Folder History | Remove only EasyFind's folder index |
+| Clear File Index | Remove only the file index and open counts; no files are deleted |
 | Quit | Quit the app |
 
 ### Empty query
 
-Manually saved entries come first, followed by history hosts ordered by visit count. Applications, bookmarks, and deep links appear only in search results; folders appear in search or `~` mode.
+Manually saved entries come first, followed by the most-used files (up to 8), then history hosts ordered by visit count. Applications, bookmarks, and deep links appear only in search results; folders appear in search or `~` mode, files in search or `@` mode.
 
 ### Search syntax
 
@@ -287,7 +314,9 @@ Manually saved entries come first, followed by history hosts ordered by visit co
 - Web: matches host, title, alias, URL path, and `#fragment`; the `?query` string is excluded (usually tracking noise).
 - Applications: matches display name and bundle ID.
 - Folders: matches folder name and **full path**.
+- Files: matches file name and **full path**.
 - A leading `~` switches to folder mode: `~` alone lists recent folders, `~mytools` filters further.
+- A leading `@` switches to file mode: `@` alone lists files by usage, `@report` filters further.
 
 ### Result actions
 
@@ -298,6 +327,7 @@ These are the **default** actions; all of them are configurable in `config.json`
 | Web / tab / manual address | open in default browser | copy URL | copy URL |
 | Application | launch | reveal in Finder | copy bundle path |
 | Folder | open in Finder | iTerm2 window with `cd` (Terminal fallback) | copy full path |
+| File | open with default app | reveal in Finder | copy full path |
 
 `↑`/`↓` to select, `Enter` or click to activate, `Esc` to close.
 
@@ -315,6 +345,8 @@ One sync runs at launch, then every 10 minutes (development builds can override 
 | Chrome tabs | AppleScript reads window/tab titles and URLs | every cycle, skipped when Chrome isn't running | Automation | full URL + title |
 | Installed apps | scans 5 standard roots, reads bundle metadata | every cycle | none | name, bundle ID, path, launch count |
 | Folder history | Cursor/VS Code `state.vscdb`, Finder `FXRecentFolders`, zsh history | every cycle | none | canonical full path, sources, count |
+| File scan | walks `files.directories` on a background queue | every cycle | **Files and Folders** (first access to Desktop/Documents/Downloads) | canonical path, name, modification time |
+| System recent documents | Spotlight `kMDItemLastUsedDate` | every cycle | **Files and Folders** | last-used time |
 | Manual entries | added in the app | immediate | none | URL + alias |
 
 Details:
@@ -326,6 +358,7 @@ Details:
 - **Apps**: top-level `.app` bundles in `/Applications`, `/Applications/Utilities`, `/System/Applications`, `/System/Applications/Utilities`, and `~/Applications`; deduplicated by bundle ID with `/Applications` preferred; nested helpers are ignored.
 - **Folders**: only absolute and `~`-rooted `cd` commands (relative paths cannot be resolved without the historical cwd); editor recents use `folderUri` and the parent of `fileUri`; Finder bookmarks are resolved; packages (`.app`, `.cannedSearch`, etc.) are excluded.
 - **Folder deduplication**: symlinks resolved, path standardized, trailing `/` removed; the key is the lowercased full path; counts, timestamps, and source labels are merged across sources.
+- **Files**: only directories listed in `files.directories` are walked, capped at `files.maxFiles` per cycle. Hidden files, packages, symlinks, and noise directories are skipped; system locations are excluded (`/usr/local` and `/opt/homebrew` are exempt). System recents are queried through Spotlight scoped to those directories and merged by canonical path, keeping the newer `last_seen`. Missing files are filtered when the snapshot is read; open counts are retained.
 
 ---
 
@@ -336,7 +369,7 @@ Details:
 ```
 
 - Directory `0700`, database `0600`, SQLite WAL.
-- Schema is migrated with `PRAGMA user_version`; currently 3 (v1 web, v2 apps, v3 folders).
+- Schema is migrated with `PRAGMA user_version`; currently 4 (v1 web, v2 apps, v3 folders, v4 files).
 
 ### `entries`
 
@@ -385,6 +418,20 @@ The five most-visited full pages per host; searchable, but never shown in the em
 
 Both `path_key` and `path` are unique. Missing directories are filtered from the index but their rows are kept, so a remounted volume can reappear.
 
+### `files`
+
+| Column | Description |
+|---|---|
+| `path_key` | lowercased canonical full path, dedupe key |
+| `path` | canonical full path (display/open) |
+| `name` | file name |
+| `visits` | source-observed count (currently 0, reserved) |
+| `own_opens` | times opened through EasyFind |
+| `last_seen` | last-used time (system recents preferred, then modification time) |
+| `sources` | combination of `scan,recent` |
+
+Both `path_key` and `path` are unique. Missing files are filtered when the snapshot is read; rows and open counts are retained.
+
 ---
 
 ## Search and ranking
@@ -399,10 +446,12 @@ Both `path_key` and `path` are unique. Missing directories are filtered from the
 | Deep link | `host + path and #fragment + title` |
 | Application | `name + bundle id` |
 | Folder | `name + full path` |
+| File | `name + full path` |
 
 3. Ranking tiers: exact → prefix → substring → other fields; ties by `visits`, then `last_seen`, then path order.
-4. The empty query bypasses search and returns "manual entries + history".
+4. The empty query bypasses search and returns "manual entries + most-used files (up to 8) + history".
 5. `~` mode searches the folder set only; an empty remainder lists recent folders by visits/time.
+6. `@` mode searches the file set only; an empty remainder lists files by open count/last use.
 
 ---
 
@@ -412,8 +461,8 @@ Both `path_key` and `path` are unique. Missing directories are filtered from the
 |---|---|
 | `⌘G` (configurable) | show/hide the panel |
 | `↑` / `↓` | move the selection |
-| `Enter` | run `actions.<kind>.enter` (default: web→browser, app→launch, folder→Finder) |
-| `⌘Enter` | run `actions.<kind>.commandEnter` (default: folder→iTerm2, app→reveal in Finder, web→copy URL) |
+| `Enter` | run `actions.<kind>.enter` (default: web→browser, app→launch, folder→Finder, file→default app) |
+| `⌘Enter` | run `actions.<kind>.commandEnter` (default: folder→iTerm2, app/file→reveal in Finder, web→copy URL) |
 | `⌥Enter` | run `actions.<kind>.optionEnter` (default: copy URL/path) |
 | `Esc` | close the panel |
 
@@ -433,6 +482,7 @@ Modified Return is intercepted by a local `keyDown` monitor before the text fiel
 | Read Safari history | Full Disk Access | add EasyFind manually in System Settings, then restart |
 | Read Chrome tabs | Automation | first-use prompt |
 | Open folders in iTerm2 | Automation | first-use prompt; denial falls back to Terminal |
+| Scan Desktop/Documents/Downloads and other configured directories | Files and Folders | first-use prompt; denial leaves that directory empty until re-granted in System Settings |
 | Login item | `SMAppService` | System Settings → General → Login Items |
 
 If Automation is denied:
@@ -447,86 +497,13 @@ Safari history is skipped without Full Disk Access while other browsers keep syn
 
 ---
 
-## Development and debugging
-
-Environment variables for local debugging only:
-
-| Variable | Effect |
-|---|---|
-| `EASYFIND_DATA_DIR` | override the database and config directory |
-| `EASYFIND_CHROME_ROOT` | override the Chrome profile root |
-| `EASYFIND_SYNC_INTERVAL` | override the sync interval (seconds) |
-| `EASYFIND_DISABLE_TABS` | `1` skips tab capture (avoids an Automation prompt) |
-| `EASYFIND_DISABLE_LOGIN_ITEM` | `1` skips login-item registration |
-
-Start with fixture data:
-
-```bash
-EASYFIND_DATA_DIR=/tmp/ef/data \
-EASYFIND_CHROME_ROOT=/tmp/ef/chrome \
-EASYFIND_DISABLE_TABS=1 EASYFIND_DISABLE_LOGIN_ITEM=1 \
-./EasyFind.app/Contents/MacOS/EasyFind
-```
-
-Logs (Unified Logging):
-
-```bash
-/usr/bin/log show --last 10m --predicate 'process == "EasyFind"' --info --private --style compact
-```
-
-Useful keywords:
-
-| Log | Meaning |
-|---|---|
-| `indexed N app(s)` | app scan result |
-| `indexed N folder(s)` | folder scan result |
-| `captured N tab(s)` | tab capture result |
-| `AppleScript returned N chars` | Chrome AppleScript output length |
-| `folder action finder/iterm2/terminal/copy` | folder action |
-| `panel shown in X ms` | panel summon latency |
-
-Read-only database checks:
-
-```bash
-DB="$HOME/Library/Application Support/easyfind/easyfind.db"
-sqlite3 "$DB" "PRAGMA user_version;"
-sqlite3 "$DB" "SELECT kind, COUNT(*) FROM entries GROUP BY kind;"
-sqlite3 "$DB" "SELECT COUNT(*), COUNT(DISTINCT path_key) FROM folders;"
-sqlite3 "$DB" "SELECT COUNT(*) FROM apps;"
-```
-
----
-
-## Troubleshooting
-
-| Symptom | Check |
-|---|---|
-| Hotkey does nothing | conflict with a system/app shortcut; pick another under menu bar → Hotkey; confirm EasyFind is running |
-| Two menu-bar icons | the repository copy and the `/Applications` copy are both running; keep only one |
-| Panel doesn't appear | check logs; confirm no other EasyFind instance is holding the hotkey |
-| Automation prompt denied | System Settings → Privacy & Security → Automation → enable EasyFind → Google Chrome / iTerm2 |
-| Tab bookmarks are 0 | Chrome isn't running, has no windows, or Automation isn't granted; look for `captured N tab(s)` |
-| Safari history is 0 | Full Disk Access isn't granted; use "Full Disk Access Settings", add EasyFind, restart |
-| Other browser history is 0 | confirm the directory/profile exists; look for `chrome/brave/firefox history: N host(s)` |
-| ⌘Enter opens Terminal | iTerm2 isn't installed or isn't `com.googlecode.iterm2`, or AppleScript failed; look for `iTerm2 AppleScript failed` |
-| Missing folders | relative `cd` targets aren't indexed; confirm the folder is in Cursor/VS Code recents or Finder recent folders |
-| Duplicate folders | normally `COUNT(*) == COUNT(DISTINCT path_key)`; if not, attach the logs |
-| Missing apps | confirm it is a top-level `.app`, has an executable, and lives in one of the five scan roots |
-| Login item stopped working | move the app back, reopen it, and remove/re-add the stale entry in System Settings |
-| Config changes not applied | menu bar → "Reload Configuration", or reopen the panel; interval changes reschedule after reload |
-| Hotkey stopped working | an unmappable key/modifier falls back to ⌘G; look for `unsupported hotkey` |
-| `config.json` is broken | EasyFind falls back to defaults without overwriting; fix the file and reload |
-| Corrupted data / start over | quit EasyFind and delete `~/Library/Application Support/easyfind/` (the web archive is lost) |
-
----
-
 ## Privacy and security
 
 - All data stays in `~/Library/Application Support/easyfind/`, directory `0700`, database `0600`.
 - The app makes no network requests; `lsof -a -p <pid> -i` is empty.
-- Command history is **not** collected; folder history stores paths only.
+- Command history is **not** collected; folder history stores paths only; the file index stores names, paths, and usage times, and **never reads file contents**.
 - The web archive is deliberately append-only: it survives a browser history wipe. To delete it completely, quit the app and remove the data directory.
-- Folder paths can contain sensitive project names; they stay local, and "Clear Folder History" removes them.
+- Folder paths and file names can contain sensitive project names; they stay local, and "Clear Folder History" / "Clear File Index" removes them.
 
 ---
 
@@ -539,6 +516,8 @@ sqlite3 "$DB" "SELECT COUNT(*) FROM apps;"
 - Apps are scanned only as top-level `.app` bundles in the five roots; apps are search-only and do not appear in the empty-query list.
 - Relative `cd` targets cannot be reconstructed; folder history only keeps absolute and `~` paths, and packages are excluded.
 - Folder sources are currently Cursor, VS Code, Finder, and zsh.
+- File search covers the configured directories only, not arbitrary full-disk content; system locations are excluded; the default cap is 20,000 files.
+- System recents depend on Spotlight metadata; directories that Spotlight has not indexed are ranked by modification time only.
 - Not notarized; ad-hoc signed and intended for local use.
 
 ---

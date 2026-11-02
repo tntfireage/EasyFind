@@ -226,7 +226,7 @@ final class StoreTests: XCTestCase {
         }
 
         let store = try Store(path: path)
-        XCTAssertEqual(try store.schemaVersion(), 3)
+        XCTAssertEqual(try store.schemaVersion(), 4)
         XCTAssertTrue(try store.snapshot().entries.contains { $0.host == "legacy.example" })
         XCTAssertTrue(try store.snapshot().apps.contains { $0.name == "Example" })
 
@@ -351,7 +351,7 @@ final class StoreTests: XCTestCase {
         }
 
         let store = try Store(path: path)
-        XCTAssertEqual(try store.schemaVersion(), 3)
+        XCTAssertEqual(try store.schemaVersion(), 4)
         XCTAssertTrue(try store.snapshot().entries.contains { $0.host == "legacy.example" })
 
         try store.replaceApps([

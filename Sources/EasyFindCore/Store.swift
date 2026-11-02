@@ -94,6 +94,25 @@ public final class Store {
             """)
             try db.setUserVersion(3)
         }
+        if version < 4 {
+            try db.exec("""
+            CREATE TABLE IF NOT EXISTS files (
+                id INTEGER PRIMARY KEY,
+                path_key TEXT NOT NULL UNIQUE,
+                path TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL,
+                visits INTEGER NOT NULL DEFAULT 0,
+                own_opens INTEGER NOT NULL DEFAULT 0,
+                last_seen INTEGER NOT NULL DEFAULT 0,
+                sources TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS ix_files_last_seen ON files(last_seen DESC);
+            CREATE INDEX IF NOT EXISTS ix_files_own_opens ON files(own_opens DESC);
+            """)
+            try db.setUserVersion(4)
+        }
     }
 
     // MARK: - Writes
@@ -436,6 +455,77 @@ public final class Store {
         }
     }
 
+    // MARK: - Files
+
+    /// Upserts the scanned file catalog. Existing rows keep their open counts and
+    /// are never removed by a refresh (missing files are filtered at read time).
+    public func replaceFiles(_ files: [FileCandidate]) throws {
+        try queue.sync {
+            try inTransaction {
+                let now = Int64(Date().timeIntervalSince1970)
+                for file in files {
+                    let select = try db.prepare("""
+                    SELECT id, visits, last_seen, sources FROM files WHERE path_key = ? OR path = ?
+                    """)
+                    select.bind(1, file.key)
+                    select.bind(2, file.path)
+
+                    if try select.step() {
+                        let id = select.int64(0)
+                        let visits = max(select.int(1), file.visits)
+                        let lastSeen = max(select.int64(2), file.lastSeen)
+                        let sources = Self.mergedSources(existing: select.text(3), adding: file.sources)
+
+                        let update = try db.prepare("""
+                        UPDATE files
+                           SET path_key = ?, path = ?, name = ?, visits = ?, last_seen = ?, sources = ?, updated_at = ?
+                         WHERE id = ?
+                        """)
+                        update.bind(1, file.key)
+                        update.bind(2, file.path)
+                        update.bind(3, file.name)
+                        update.bind(4, visits)
+                        update.bind(5, lastSeen)
+                        update.bind(6, sources)
+                        update.bind(7, now)
+                        update.bind(8, id)
+                        _ = try update.step()
+                    } else {
+                        let insert = try db.prepare("""
+                        INSERT INTO files (path_key, path, name, visits, own_opens, last_seen, sources, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
+                        """)
+                        insert.bind(1, file.key)
+                        insert.bind(2, file.path)
+                        insert.bind(3, file.name)
+                        insert.bind(4, file.visits)
+                        insert.bind(5, file.lastSeen)
+                        insert.bind(6, file.sources.sorted().joined(separator: ","))
+                        insert.bind(7, now)
+                        insert.bind(8, now)
+                        _ = try insert.step()
+                    }
+                }
+            }
+        }
+    }
+
+    public func recordFileOpen(id: Int64) throws {
+        try queue.sync {
+            let update = try db.prepare("UPDATE files SET own_opens = own_opens + 1, last_seen = MAX(last_seen, ?), updated_at = ? WHERE id = ?")
+            update.bind(1, Int64(Date().timeIntervalSince1970))
+            update.bind(2, Int64(Date().timeIntervalSince1970))
+            update.bind(3, id)
+            _ = try update.step()
+        }
+    }
+
+    public func clearFiles() throws {
+        try queue.sync {
+            try db.exec("DELETE FROM files")
+        }
+    }
+
     private static func mergedSources(existing: String?, adding: [String]) -> String {
         var set = Set<String>()
         if let existing {
@@ -524,8 +614,39 @@ public final class Store {
                 ))
             }
 
-            return StoreSnapshot(entries: entries, deepLinks: topLinks, apps: apps, folders: folders)
+            var files: [StoredFile] = []
+            let fileStatement = try db.prepare(
+                "SELECT id, path, name, visits, own_opens, last_seen, sources FROM files ORDER BY last_seen DESC"
+            )
+            while try fileStatement.step() {
+                let path = fileStatement.text(1) ?? ""
+                guard Self.isExistingRegularFile(path) else { continue }
+                let sources = (fileStatement.text(6) ?? "")
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                files.append(StoredFile(
+                    id: fileStatement.int64(0),
+                    path: path,
+                    name: fileStatement.text(2) ?? "",
+                    visits: fileStatement.int(3),
+                    ownOpens: fileStatement.int(4),
+                    lastSeen: fileStatement.int64(5),
+                    sources: sources
+                ))
+            }
+
+            return StoreSnapshot(entries: entries, deepLinks: topLinks, apps: apps, folders: folders, files: files)
         }
+    }
+
+    private static func isExistingRegularFile(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+            return false
+        }
+        return !isDirectory.boolValue
     }
 
     private func topDeepLinks(_ links: [DeepLink], limitPerHost: Int) -> [DeepLink] {

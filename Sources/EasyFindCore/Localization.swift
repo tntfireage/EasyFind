@@ -45,6 +45,7 @@ public struct Strings: Equatable {
     public var menuReloadConfig: String { t("重新加载配置", "Reload Configuration") }
     public var menuFullDiskAccess: String { t("完全磁盘访问设置", "Full Disk Access Settings") }
     public var menuClearFolders: String { t("清除目录历史", "Clear Folder History") }
+    public var menuClearFiles: String { t("清除文件索引", "Clear File Index") }
     public var menuQuit: String { t("退出", "Quit") }
 
     public var languageAuto: String { t("自动", "Auto") }
@@ -58,7 +59,8 @@ public struct Strings: Equatable {
     // MARK: - Panel
 
     public var searchPlaceholder: String {
-        t("搜索地址、应用或目录（~ 只看目录）", "Search addresses, apps, or folders (~ for folders)")
+        t("搜索地址、应用、目录或文件（~ 只看目录，@ 只看文件）",
+          "Search addresses, apps, folders, or files (~ folders, @ files)")
     }
     public var emptyNoData: String {
         t(
@@ -67,6 +69,7 @@ public struct Strings: Equatable {
         )
     }
     public var emptyNoFolders: String { t("还没有目录记录", "No folders yet") }
+    public var emptyNoFiles: String { t("还没有文件索引", "No files yet") }
     public var emptyNoResults: String { t("没有匹配结果", "No matches") }
     public var appSubtitle: String { t("应用程序", "Application") }
     public var manualSubtitle: String { t("手动", "Manual") }
@@ -97,6 +100,13 @@ public struct Strings: Equatable {
         t(
             "只删除 EasyFind 的目录索引，不会修改 shell 历史、编辑器最近列表或 Finder 记录。",
             "Only EasyFind's folder index is removed. Shell history, editor recents, and Finder records are untouched."
+        )
+    }
+    public var clearFilesTitle: String { t("清除文件索引？", "Clear file index?") }
+    public var clearFilesInfo: String {
+        t(
+            "只删除 EasyFind 的文件索引与打开次数，下次同步会重新扫描配置中的目录。不会删除任何文件。",
+            "Only EasyFind's file index and open counts are removed. The configured directories are rescanned on the next sync. No files are deleted."
         )
     }
     public var clearButton: String { t("清除", "Clear") }

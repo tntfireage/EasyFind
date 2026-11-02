@@ -5,6 +5,11 @@
       "enter" : "open",
       "optionEnter" : "copy"
     },
+    "file" : {
+      "commandEnter" : "finder",
+      "enter" : "open",
+      "optionEnter" : "copy"
+    },
     "folder" : {
       "commandEnter" : "terminal",
       "enter" : "open",
@@ -15,6 +20,14 @@
       "enter" : "open",
       "optionEnter" : "copy"
     }
+  },
+  "files" : {
+    "directories" : [
+      "~/Desktop",
+      "~/Documents",
+      "~/Downloads"
+    ],
+    "maxFiles" : 20000
   },
   "hotkey" : {
     "key" : "g",
@@ -27,6 +40,7 @@
     "apps" : true,
     "chromeHistory" : true,
     "chromeTabs" : true,
+    "files" : true,
     "folders" : true,
     "intervalMinutes" : 10
   },

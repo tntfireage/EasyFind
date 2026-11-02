@@ -32,5 +32,11 @@
     <string>NSApplication</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>EasyFind reads the titles and URLs of your open Chrome tabs to save them as bookmarks, and can open iTerm2 at a folder you choose. It never modifies your browser or terminal data.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>EasyFind indexes file names in the folders you configure so you can search them from the launcher. File contents are never read.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>EasyFind indexes file names in the folders you configure so you can search them from the launcher. File contents are never read.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>EasyFind indexes file names in the folders you configure so you can search them from the launcher. File contents are never read.</string>
 </dict>
 </plist>

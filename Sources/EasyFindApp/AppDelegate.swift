@@ -91,7 +91,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             entries: snapshot.entries,
             deepLinks: snapshot.deepLinks,
             apps: snapshot.apps,
-            folders: snapshot.folders
+            folders: snapshot.folders,
+            files: snapshot.files
         )
     }
 
@@ -191,6 +192,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         clearFoldersItem.target = self
         menu.addItem(clearFoldersItem)
 
+        let clearFilesItem = NSMenuItem(title: strings.menuClearFiles, action: #selector(clearFileIndex), keyEquivalent: "")
+        clearFilesItem.target = self
+        menu.addItem(clearFilesItem)
+
         let quitItem = NSMenuItem(title: strings.menuQuit, action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -280,6 +285,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: strings.cancelButton)
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         try? store.clearFolders()
+        reloadIndex()
+        panelController?.reloadKeepingSelection()
+    }
+
+    @objc private func clearFileIndex() {
+        guard let store else { return }
+        let alert = NSAlert()
+        alert.messageText = strings.clearFilesTitle
+        alert.informativeText = strings.clearFilesInfo
+        alert.addButton(withTitle: strings.clearButton)
+        alert.addButton(withTitle: strings.cancelButton)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        try? store.clearFiles()
         reloadIndex()
         panelController?.reloadKeepingSelection()
     }

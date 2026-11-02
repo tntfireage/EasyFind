@@ -6,6 +6,7 @@ public enum EntryKind: String, Codable, CaseIterable {
     case manual
     case app
     case folder
+    case file
 }
 
 public struct Entry: Equatable {
@@ -44,6 +45,8 @@ public struct Entry: Equatable {
         case .app:
             return url ?? ""
         case .folder:
+            return url ?? ""
+        case .file:
             return url ?? ""
         }
     }
@@ -200,17 +203,63 @@ public struct StoredFolder: Equatable {
     }
 }
 
+public struct FileCandidate: Equatable {
+    /// Lowercased canonical path; the dedupe key.
+    public let key: String
+    /// Canonical full path as displayed and opened.
+    public let path: String
+    public let name: String
+    /// Usage signal carried by the source (currently 0; EasyFind opens live in `own_opens`).
+    public let visits: Int
+    public let lastSeen: Int64
+    /// `scan` for indexed directories, `recent` for the system recent-documents list.
+    public let sources: [String]
+
+    public init(key: String, path: String, name: String, visits: Int, lastSeen: Int64, sources: [String]) {
+        self.key = key
+        self.path = path
+        self.name = name
+        self.visits = visits
+        self.lastSeen = lastSeen
+        self.sources = sources
+    }
+}
+
+public struct StoredFile: Equatable {
+    public let id: Int64
+    public let path: String
+    public let name: String
+    public let visits: Int
+    public let ownOpens: Int
+    public let lastSeen: Int64
+    public let sources: [String]
+
+    public init(id: Int64, path: String, name: String, visits: Int, ownOpens: Int,
+                lastSeen: Int64, sources: [String]) {
+        self.id = id
+        self.path = path
+        self.name = name
+        self.visits = visits
+        self.ownOpens = ownOpens
+        self.lastSeen = lastSeen
+        self.sources = sources
+    }
+}
+
 public struct StoreSnapshot {
     public let entries: [Entry]
     public let deepLinks: [DeepLink]
     public let apps: [StoredApp]
     public let folders: [StoredFolder]
+    public let files: [StoredFile]
 
-    public init(entries: [Entry], deepLinks: [DeepLink], apps: [StoredApp] = [], folders: [StoredFolder] = []) {
+    public init(entries: [Entry], deepLinks: [DeepLink], apps: [StoredApp] = [],
+                folders: [StoredFolder] = [], files: [StoredFile] = []) {
         self.entries = entries
         self.deepLinks = deepLinks
         self.apps = apps
         self.folders = folders
+        self.files = files
     }
 }
 

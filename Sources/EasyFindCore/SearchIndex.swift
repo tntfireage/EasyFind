@@ -26,11 +26,15 @@ public final class SearchIndex {
     private var manualEntries: [IndexEntry] = []
     private var historyEntries: [IndexEntry] = []
     private var folderEntries: [IndexEntry] = []
+    private var fileEntries: [IndexEntry] = []
+
+    private static let defaultFileLimit = 8
 
     public init() {}
 
     public func update(entries sourceEntries: [Entry], deepLinks: [DeepLink],
-                       apps: [StoredApp] = [], folders: [StoredFolder] = []) {
+                       apps: [StoredApp] = [], folders: [StoredFolder] = [],
+                       files: [StoredFile] = []) {
         var all: [IndexEntry] = []
         all.reserveCapacity(sourceEntries.count + deepLinks.count)
 
@@ -110,19 +114,39 @@ public final class SearchIndex {
             ))
         }
 
+        for file in files {
+            let haystack = "\(file.name.lowercased()) \(file.path.lowercased())"
+            all.append(IndexEntry(
+                id: file.id,
+                kind: .file,
+                isDeepLink: false,
+                host: file.name.lowercased(),
+                title: file.name,
+                alias: nil,
+                url: file.path,
+                openTarget: file.path,
+                visits: file.visits + file.ownOpens,
+                lastSeen: file.lastSeen,
+                haystack: haystack
+            ))
+        }
+
         entries = all
         manualEntries = all.filter { $0.kind == .manual }
         historyEntries = all.filter { $0.kind == .history && !$0.isDeepLink }
         folderEntries = all.filter { $0.kind == .folder }
+        fileEntries = all.filter { $0.kind == .file }
     }
 
-    /// The empty-query list: manual entries first, then history by visit count.
+    /// The empty-query list: manual entries first, then the most-used files, then history.
     public func defaultEntries() -> [IndexEntry] {
         let manual = manualEntries.sorted { lhs, rhs in
             if lhs.lastSeen != rhs.lastSeen { return lhs.lastSeen > rhs.lastSeen }
             return lhs.openTarget < rhs.openTarget
         }
-        return manual + sortedByPopularity(historyEntries)
+        return manual
+            + Array(sortedByPopularity(fileEntries).prefix(Self.defaultFileLimit))
+            + sortedByPopularity(historyEntries)
     }
 
     public func search(_ query: String) -> [IndexEntry] {
@@ -136,6 +160,19 @@ public final class SearchIndex {
             guard !remainder.isEmpty else { return sortedByPopularity(folderEntries) }
             let tokens = remainder.split(whereSeparator: { $0.isWhitespace }).map(String.init)
             let matched = folderEntries.filter { entry in
+                tokens.allSatisfy { entry.haystack.contains($0) }
+            }
+            return sorted(matched, query: remainder, tokens: tokens)
+        }
+
+        // `@` switches to a file-only view; `@` alone lists the most-used files.
+        if trimmed.hasPrefix("@") {
+            let remainder = String(trimmed.dropFirst())
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            guard !remainder.isEmpty else { return sortedByPopularity(fileEntries) }
+            let tokens = remainder.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            let matched = fileEntries.filter { entry in
                 tokens.allSatisfy { entry.haystack.contains($0) }
             }
             return sorted(matched, query: remainder, tokens: tokens)

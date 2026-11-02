@@ -200,6 +200,7 @@ write_config() {
         CFG_TABS="$TABS" \
         CFG_APPS="$APPS" \
         CFG_FOLDERS="$FOLDERS" \
+        CFG_FILES="$FILES" \
         CFG_TERMINAL="$TERMINAL" \
         python3 - "$CONFIG_PATH" <<'PY'
 import json
@@ -237,6 +238,7 @@ existing["sync"]["chromeHistory"] = os.environ["CFG_HISTORY"] == "true"
 existing["sync"]["chromeTabs"] = os.environ["CFG_TABS"] == "true"
 existing["sync"]["apps"] = os.environ["CFG_APPS"] == "true"
 existing["sync"]["folders"] = os.environ["CFG_FOLDERS"] == "true"
+existing["sync"]["files"] = os.environ["CFG_FILES"] == "true"
 existing["terminal"]["application"] = os.environ["CFG_TERMINAL"]
 
 directory = os.path.dirname(path)
@@ -269,6 +271,7 @@ PY
     "apps": $APPS,
     "chromeHistory": $HISTORY,
     "chromeTabs": $TABS,
+    "files": $FILES,
     "folders": $FOLDERS,
     "intervalMinutes": $INTERVAL
   },
@@ -386,6 +389,7 @@ configure_if_needed() {
         TABS=true
         APPS=true
         FOLDERS=true
+        FILES=true
         TERMINAL="auto"
         if write_config >/dev/null; then
             say "$(pick '已写入默认配置' 'Default config written'): $CONFIG_PATH"
@@ -416,13 +420,14 @@ configure_if_needed() {
     if ask_yes_no "$(pick 'Chrome 标签页' 'Chrome tabs')" y; then TABS=true; else TABS=false; fi
     if ask_yes_no "$(pick '已安装应用' 'Applications')" y; then APPS=true; else APPS=false; fi
     if ask_yes_no "$(pick '目录历史' 'Folder history')" y; then FOLDERS=true; else FOLDERS=false; fi
+    if ask_yes_no "$(pick '常用文件（桌面/文稿/下载）' 'Frequent files (Desktop/Documents/Downloads)')" y; then FILES=true; else FILES=false; fi
     choose_terminal
 
     printf '\n'
     printf '  %s : %s\n' "$(pick '语言' 'Language')" "$LANGUAGE"
     printf '  %s : %s\n' "$(pick '热键' 'Hotkey')" "$HOTKEY_LABEL"
-    printf '  %s : %s %s · browser=%s tabs=%s apps=%s folders=%s\n' \
-        "$(pick '同步' 'Sync')" "$INTERVAL" "$(pick '分钟' 'min')" "$HISTORY" "$TABS" "$APPS" "$FOLDERS"
+    printf '  %s : %s %s · browser=%s tabs=%s apps=%s folders=%s files=%s\n' \
+        "$(pick '同步' 'Sync')" "$INTERVAL" "$(pick '分钟' 'min')" "$HISTORY" "$TABS" "$APPS" "$FOLDERS" "$FILES"
     printf '  %s : %s\n' "$(pick '终端' 'Terminal')" "$TERMINAL"
     printf '\n'
 
