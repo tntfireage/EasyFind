@@ -1,0 +1,44 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Swift Package Manager / build artifacts
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+*.xcuserstate
+
+# Built app bundles produced by `make build`
+/EasyFind.app
+/easyfind.app
+
+# OpenSpec working directory
+/openspec/
+
+# Local configuration (defaults are documented in config.example.json)
+/config.json
+config.local.json
+
+# Claude Code local tooling
+/.claude/
+
+# Test and coverage output
+*.profraw
+*.profdata
+*.cov
+coverage/
+*.xccovreport
+*.xccovarchive
+
+# Logs, temporary and editor files
+*.log
+*.swp
+*.swo
+*~
+.idea/
+.vscode/

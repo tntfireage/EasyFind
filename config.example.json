@@ -1,0 +1,36 @@
+{
+  "actions" : {
+    "app" : {
+      "commandEnter" : "finder",
+      "enter" : "open",
+      "optionEnter" : "copy"
+    },
+    "folder" : {
+      "commandEnter" : "terminal",
+      "enter" : "open",
+      "optionEnter" : "copy"
+    },
+    "web" : {
+      "commandEnter" : "copy",
+      "enter" : "open",
+      "optionEnter" : "copy"
+    }
+  },
+  "hotkey" : {
+    "key" : "g",
+    "modifiers" : [
+      "command"
+    ]
+  },
+  "language" : "zh",
+  "sync" : {
+    "apps" : true,
+    "chromeHistory" : true,
+    "chromeTabs" : true,
+    "folders" : true,
+    "intervalMinutes" : 10
+  },
+  "terminal" : {
+    "application" : "auto"
+  }
+}
